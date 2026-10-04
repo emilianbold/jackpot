@@ -1,6 +1,6 @@
 ---
 name: Jackpot semantic search and rewrite
-description: Find or rewrite Java code by what it means, not what it says, using the Apache NetBeans Java engine (javac-resolved types and bindings). A rule is a Java pattern plus conditions; `scan` reports every match across a source tree (a semantic grep), `rewrite` replaces them in one AST-verified pass. Use for questions like "where is this method called on that type" and for changes that repeat across files or depend on overloads, types or scopes rather than text.
+description: Find or rewrite Java code by meaning, not text, with the Apache NetBeans Java engine (javac-resolved types and bindings). A rule is a Java pattern plus conditions; `scan` lists every match in a source tree, `rewrite` replaces them in one verified pass. Use for "where is this method called on that type" and for changes that repeat across files or depend on types, overloads or scopes.
 ---
 <!--
 
@@ -29,10 +29,14 @@ Jackpot is a search-and-rewrite tool for Java that works on resolved javac
 syntax trees. It is the batch front end of the Apache NetBeans Java engine —
 the same parser, type attribution and rewriting machinery behind the IDE's
 inspections and refactorings — packaged as a standalone command. You write one
-**rule**: a Java pattern, optional conditions, and optionally a replacement. `scan` reports every place the rule matches across a
-source tree; `rewrite` replaces them in a single pass. Matching is by binding
-and type, not by text, so an overloaded method, a same-named symbol in another
-scope, or identical-looking text in an unrelated context are told apart.
+**rule**: a Java pattern, optional conditions, and optionally a replacement.
+
+`scan` reports every place the rule matches across a source tree; `rewrite`
+replaces them in a single pass.
+
+Matching is by binding and type, not by text, so an overloaded method, a
+same-named symbol in another scope, or identical-looking text in an
+unrelated context are told apart.
 
 Rule of thumb: if the question is "where is P used, on this type" or the
 change is "replace every P with R", write a rule and run it once. A rule
@@ -46,14 +50,12 @@ class or package is. A regexp or a syntax-only tool can find `foo(x)`; a rule
 can find *this* `foo` on *this* resolved type, and leave the identically
 spelled call on an unrelated class alone. That holds for searching as much as
 for rewriting: "all `get(0)` calls on a `List`", "all methods of this class",
-"all loops whose index is never read" are one `scan` each.
+"every `size() == 0` on a `Collection`" are one `scan` each.
 
-Do not reach for it when the change is purely about **shape** — renaming a
+Do not reach for it when the change is purely about **text** — renaming a
 string, swapping `System.err` for `System.out`, reformatting — and no condition
-is needed. A syntax-level tool such as ast-grep, or a careful text edit, does
-that in milliseconds; Jackpot costs a few seconds of startup plus tens of
-milliseconds per file (≈16 s for 270 files). *ast-grep for shape, Jackpot for
-meaning.*
+is needed. A plain text edit is also much faster; Jackpot costs a few seconds
+of startup (depending on number of files).
 
 Operations that are positional rather than pattern-shaped — "extract exactly
 this selection", "move this file's class" — are not what the rule language is

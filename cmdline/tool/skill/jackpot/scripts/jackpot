@@ -16,8 +16,17 @@
 # Run Jackpot under a compatible JDK (21-25).
 #
 # The launcher is resolved from, in order:
-#   1. $JACKPOT          - path to a jackpot executable, or a directory containing one
-#   2. `jackpot`         - the command on $PATH
+#   1. ../jackpot        - when this skill directory is the unpacked release zip
+#   2. $JACKPOT          - path to a jackpot executable, or a directory containing one
+#   3. `jackpot`         - the command on $PATH
+#   4. the release pinned below, downloaded once into ~/.cache/jackpot (or
+#      $XDG_CACHE_HOME/jackpot) after verifying its SHA-256; set
+#      JACKPOT_NO_DOWNLOAD=1 to disable this and get an error instead.
+#
+# The pin is updated by the release workflow after each release.
+JACKPOT_RELEASE="v31.0-agent.1"
+JACKPOT_RELEASE_SHA256="2ba493673c5f3cb5daed8fbd566614a77a6b54259dd175bc84384e561c8941e3"
+JACKPOT_RELEASE_URL="https://github.com/emilianbold/jackpot/releases/download/${JACKPOT_RELEASE}/jackpot-${JACKPOT_RELEASE}.zip"
 #
 # A JDK is chosen from, in order:
 #   1. $JACKPOT_JAVA_HOME
@@ -27,6 +36,11 @@
 set -euo pipefail
 
 find_launcher() {
+  # bundled layout: this skill directory is the unpacked release (SKILL.md next to jackpot.jar)
+  local self_dir; self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  if [[ -f "$self_dir/../jackpot" && -f "$self_dir/../jackpot.jar" ]]; then
+    printf '%s\n' "$self_dir/../jackpot"; return 0
+  fi
   if [[ -n "${JACKPOT:-}" ]]; then
     if [[ -d "$JACKPOT" && -f "$JACKPOT/jackpot" ]]; then
       printf '%s\n' "$JACKPOT/jackpot"; return 0
@@ -42,9 +56,42 @@ find_launcher() {
   if [[ -n "$on_path" ]]; then
     printf '%s\n' "$on_path"; return 0
   fi
-  echo "jackpot: no launcher found. Install Jackpot so 'jackpot' is on \$PATH," >&2
-  echo "or set JACKPOT to the launcher's path." >&2
-  return 1
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/jackpot/$JACKPOT_RELEASE"
+  if [[ -f "$cache/jackpot/jackpot" ]]; then
+    printf '%s\n' "$cache/jackpot/jackpot"; return 0
+  fi
+  if [[ -n "${JACKPOT_NO_DOWNLOAD:-}" ]]; then
+    echo "jackpot: no launcher found and JACKPOT_NO_DOWNLOAD is set. Download" >&2
+    echo "  $JACKPOT_RELEASE_URL" >&2
+    echo "unzip it (needs Java 21+), and put jackpot/jackpot on \$PATH or set JACKPOT to it." >&2
+    return 1
+  fi
+  download_release "$cache" || return 1
+  printf '%s\n' "$cache/jackpot/jackpot"
+}
+
+# Fetches the pinned release zip, verifies its SHA-256, and unpacks it into $1.
+download_release() {
+  local cache=$1 tmp
+  command -v curl >/dev/null || { echo "jackpot: curl is needed to download $JACKPOT_RELEASE_URL" >&2; return 1; }
+  command -v unzip >/dev/null || { echo "jackpot: unzip is needed to unpack the release" >&2; return 1; }
+  echo "jackpot: tool not found locally; downloading release $JACKPOT_RELEASE (~30 MB) from" >&2
+  echo "  $JACKPOT_RELEASE_URL" >&2
+  echo "  into $cache (SHA-256 verified)" >&2
+  tmp=$(mktemp -d) || return 1
+  if ! curl -fsSL --retry 2 -o "$tmp/jackpot.zip" "$JACKPOT_RELEASE_URL"; then
+    echo "jackpot: download failed" >&2; rm -rf "$tmp"; return 1
+  fi
+  local actual
+  actual=$( (sha256sum "$tmp/jackpot.zip" 2>/dev/null || shasum -a 256 "$tmp/jackpot.zip") | awk '{print $1}')
+  if [[ "$actual" != "$JACKPOT_RELEASE_SHA256" ]]; then
+    echo "jackpot: SHA-256 mismatch for $JACKPOT_RELEASE_URL" >&2
+    echo "  expected $JACKPOT_RELEASE_SHA256" >&2
+    echo "  got      $actual" >&2
+    rm -rf "$tmp"; return 1
+  fi
+  mkdir -p "$cache" && unzip -q -o "$tmp/jackpot.zip" -d "$cache" && chmod +x "$cache/jackpot/jackpot"
+  rm -rf "$tmp"
 }
 
 pick_java_home() {

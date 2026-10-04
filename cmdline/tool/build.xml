@@ -76,11 +76,12 @@
                 <exclude name="hints" />
                 <exclude name="jackpot" />
             </zipfileset>
-            <!-- the coding-agent skill: instructions for using the command-based interface -->
-            <zipfileset dir="skill" prefix="jackpot/skill">
-                <exclude name="**/scripts/jackpot" />
+            <!-- the top-level folder is itself a coding-agent skill (SKILL.md + scripts/),
+                 so unzipping into an agent's skills directory installs tool and skill together -->
+            <zipfileset dir="skill/jackpot" prefix="jackpot">
+                <exclude name="scripts/jackpot" />
             </zipfileset>
-            <zipfileset file="skill/jackpot/scripts/jackpot" filemode="755" fullpath="jackpot/skill/jackpot/scripts/jackpot"/>
+            <zipfileset file="skill/jackpot/scripts/jackpot" filemode="755" fullpath="jackpot/scripts/jackpot"/>
         </zip>
         <zip destfile="${build.classes.dir}/../jackpot-sources.zip">
             <zipfileset dir="src"/>

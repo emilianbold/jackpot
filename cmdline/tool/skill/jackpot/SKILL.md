@@ -1,6 +1,7 @@
 ---
 name: Jackpot semantic search and rewrite
 description: Find or rewrite Java code by meaning, not text, with the Apache NetBeans Java engine (javac-resolved types and bindings). A rule is a Java pattern plus conditions; `scan` lists every match in a source tree, `rewrite` replaces them in one verified pass. Use for "where is this method called on that type" and for changes that repeat across files or depend on types, overloads or scopes.
+compatibility: Requires Java 21 or newer, bash, and the jackpot tool (bundled in the release zip; otherwise scripts/jackpot downloads the pinned ~30 MB release once, SHA-256 verified, into ~/.cache/jackpot).
 ---
 <!--
 
@@ -90,9 +91,13 @@ jackpot doctor   [context] <root>...                   # the context the tool wo
   diagnostics always go to stderr as `severity[CODE]: message`.
 - Exit codes: `0` ok · `1` usage · `2` rule error · `3` context problem ·
   `4` rewrite incomplete · `5` matches found (`scan --fail-on-match`, for CI).
-- Needs a JDK 21–25 runtime. If `jackpot` is not on `PATH`, set `JACKPOT` to
-  the launcher; the bundled `scripts/jackpot` wrapper resolves that and picks
-  a compatible JDK (`JACKPOT_JAVA_HOME` to override).
+- Needs Java 21 or newer. Run the tool through this skill's `scripts/jackpot`:
+  it uses the launcher bundled next to this file (when the skill was installed
+  from the release zip), else `$JACKPOT` or `jackpot` on `PATH`, else it
+  downloads the pinned release once (~30 MB, SHA-256 verified) into
+  `~/.cache/jackpot` — set `JACKPOT_NO_DOWNLOAD=1` to forbid that. It picks a
+  Java 21+ runtime (`JACKPOT_JAVA_HOME` to override). Releases:
+  https://github.com/emilianbold/jackpot/releases
 
 ## The loop
 

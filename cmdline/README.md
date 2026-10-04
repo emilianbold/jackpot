@@ -91,12 +91,14 @@ are refused unless `--allow-embedded-java` is given.
 $ jackpot help
 ```
 
-`skill/jackpot/` contains an agent skill (a `SKILL.md` in the format
-used by OpenCode, Claude Code and similar tools) that teaches a coding agent
-when and how to use this interface, with verified rule examples. Copy or link
-the directory into the agent's skills folder (e.g. `.opencode/skills/`,
-`.claude/skills/`); its `scripts/jackpot` wrapper finds the launcher through
-`$JACKPOT` or `jackpot` on `PATH` and selects a Java 21+ runtime.
+The unpacked archive is also an agent skill: `jackpot/SKILL.md` (in the format
+used by OpenCode, Claude Code and similar tools) teaches a coding agent when
+and how to use this interface, with verified rule examples, and
+`jackpot/scripts/jackpot` runs the launcher next to it. Unzipping the archive
+into the agent's skills directory (e.g. `.opencode/skills/`, `.claude/skills/`)
+therefore installs the tool and the skill together. The skill alone lives in
+`skill/jackpot/` in the sources; installed without the jar, its wrapper falls
+back to `$JACKPOT` or `jackpot` on `PATH`.
 
 ### Example
 

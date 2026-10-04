@@ -90,8 +90,9 @@ jobs:
             rm -rf /tmp/smoke && mkdir -p /tmp/smoke/src/demo && cd /tmp/smoke
             unzip -q "$GITHUB_WORKSPACE/cmdline/tool/build/jackpot.zip"
             test -x jackpot/jackpot
-            test -f jackpot/skill/jackpot/SKILL.md
-            test -x jackpot/skill/jackpot/scripts/jackpot
+            test -f jackpot/SKILL.md
+            test -x jackpot/scripts/jackpot
+            jackpot/scripts/jackpot help | head -1   # the skill wrapper finds the bundled launcher
             cat > src/demo/Demo.java <<'JAVA'
             package demo;
             import java.util.List;
@@ -168,7 +169,7 @@ jobs:
             jackpot/jackpot help
             \`\`\`
 
-            Put \`jackpot/jackpot\` on your PATH (or set \`JACKPOT\` to it). To teach a coding agent to use it, copy or link \`jackpot/skill/jackpot\` into the agent's skills directory (e.g. \`.opencode/skills/\`, \`.claude/skills/\`).
+            The unpacked \`jackpot/\` folder is also a coding-agent skill (\`SKILL.md\` + \`scripts/jackpot\`): unzip it into the agent's skills directory (e.g. \`.opencode/skills/\`, \`.claude/skills/\`) to install tool and skill together. For shell use, put \`jackpot/jackpot\` on your PATH.
 
             ## Try
 
@@ -183,3 +184,22 @@ jobs:
             EOF
             gh release create "$V" "jackpot-${V}.zip" "jackpot-${V}.zip.sha256" \
               --repo "$GITHUB_REPOSITORY" --title "jackpot ${V}" --notes-file notes.md
+
+      # The skill installed from the git repository (not from the zip) downloads the
+      # release pinned in its wrapper; point that pin at the release just made.
+      - name: Update the skill wrapper's release pin
+        if: github.ref_type == 'tag'
+        env:
+          V: ${{ steps.name.outputs.version }}
+          BRANCH: agent-tool
+        run: |
+            SHA=$(cut -d' ' -f1 "jackpot-${V}.zip.sha256")
+            git fetch --depth=1 origin "$BRANCH"
+            git checkout -B "$BRANCH" FETCH_HEAD
+            W=cmdline/tool/skill/jackpot/scripts/jackpot
+            sed -i "s/^JACKPOT_RELEASE=.*/JACKPOT_RELEASE=\"${V}\"/; s/^JACKPOT_RELEASE_SHA256=.*/JACKPOT_RELEASE_SHA256=\"${SHA}\"/" "$W"
+            if git diff --quiet; then echo "pin already current"; exit 0; fi
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "Skill wrapper: pin release ${V}"
+            git push "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${BRANCH}"

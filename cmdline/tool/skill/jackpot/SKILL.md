@@ -1,6 +1,6 @@
 ---
 name: Jackpot semantic search and rewrite
-description: Find or rewrite Java code by what it means, not what it says. A rule is a Java pattern plus conditions on resolved types and bindings; `scan` reports every match across a source tree (a semantic grep), `rewrite` replaces them in one AST-verified pass. Use for questions like "where is this method called on that type" and for changes that repeat across files or depend on overloads, types or scopes rather than text.
+description: Find or rewrite Java code by what it means, not what it says, using the Apache NetBeans Java engine (javac-resolved types and bindings). A rule is a Java pattern plus conditions; `scan` reports every match across a source tree (a semantic grep), `rewrite` replaces them in one AST-verified pass. Use for questions like "where is this method called on that type" and for changes that repeat across files or depend on overloads, types or scopes rather than text.
 ---
 <!--
 
@@ -26,8 +26,10 @@ description: Find or rewrite Java code by what it means, not what it says. A rul
 # Jackpot
 
 Jackpot is a search-and-rewrite tool for Java that works on resolved javac
-syntax trees. You write one **rule**: a Java pattern, optional conditions, and
-optionally a replacement. `scan` reports every place the rule matches across a
+syntax trees. It is the batch front end of the Apache NetBeans Java engine —
+the same parser, type attribution and rewriting machinery behind the IDE's
+inspections and refactorings — packaged as a standalone command. You write one
+**rule**: a Java pattern, optional conditions, and optionally a replacement. `scan` reports every place the rule matches across a
 source tree; `rewrite` replaces them in a single pass. Matching is by binding
 and type, not by text, so an overloaded method, a same-named symbol in another
 scope, or identical-looking text in an unrelated context are told apart.

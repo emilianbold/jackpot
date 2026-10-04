@@ -28,11 +28,13 @@ if [ -n "$JAVA_FEATURE" ] && [ "$JAVA_FEATURE" -lt 21 ] 2>/dev/null ; then
     echo "jackpot: Java $JAVA_FEATURE found at $JAVA; this tool needs Java 21 or newer (set JAVA_HOME)" >&2
     exit 1
 fi
-# "jackpot scan|rewrite|try|inspections|doctor|help ..." is the agent-oriented
-# command line; anything else is the original flag-based interface.
+# "jackpot scan|rewrite|try|inspections|doctor|context|help ..." is the agent-oriented
+# command line; anything else is the original flag-based interface, whose bare
+# arguments are source roots - so an existing directory of that name is still a root.
 MAIN=org.netbeans.modules.jackpot30.cmdline.Main
 case "$1" in
-    scan|rewrite|try|inspections|doctor|context|help) MAIN=org.netbeans.modules.jackpot30.cmdline.AgentMain ;;
+    scan|rewrite|try|inspections|doctor|context|help)
+        if [ ! -d "$1" ] ; then MAIN=org.netbeans.modules.jackpot30.cmdline.AgentMain ; fi ;;
 esac
 exec "$JAVA" -XX:+IgnoreUnrecognizedVMOptions \
      -Djava.awt.headless=true \

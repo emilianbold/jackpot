@@ -1129,6 +1129,7 @@ public class AgentMain {
      * The engine does not type-check replacements, so a replacement can refer to
      * a method the receiver does not have; this makes that visible.
      */
+    @SuppressWarnings("rawtypes") //CompilationInfo.getDiagnostics() returns the raw List<Diagnostic>
     static final class Verifier {
 
         static int introducedErrors(Change c, Report report) {

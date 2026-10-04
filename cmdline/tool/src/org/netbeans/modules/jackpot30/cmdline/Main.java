@@ -691,7 +691,7 @@ public class Main {
             for (Entry<? extends IndexEnquirer, ? extends Collection<? extends Resource>> e : projectId2Resources.entrySet()) {
                 filteredProjectId2Resources.put(e.getKey(), e.getValue().stream().filter(r -> patch.included(r.getResolvedFile())).collect(Collectors.toList()));
             }
-            return new BatchResult(projectId2Resources, result.problems);
+            return new BatchResult(filteredProjectId2Resources, result.problems);
         } catch (ReflectiveOperationException ex) {
             Exceptions.printStackTrace(ex);
             return result;
@@ -1289,7 +1289,7 @@ public class Main {
 
         public boolean included(ErrorDescription error) {
             int startLine = findLineForPos(file2LineStarts, error.getFile(), error.getRange().getBegin());
-            int endLine = findLineForPos(file2LineStarts, error.getFile(), error.getRange().getBegin());
+            int endLine = findLineForPos(file2LineStarts, error.getFile(), error.getRange().getEnd());
             Set<Integer> addedLines = file2AddedLines.get(error.getFile());
 
             if (addedLines == null) {

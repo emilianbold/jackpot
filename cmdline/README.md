@@ -61,6 +61,36 @@ To get help on the options, run:
 $ jackpot --help
 ```
 
+### Running for scripts and coding agents
+
+A second, command-based interface takes rules inline and reports what it did,
+optionally as JSON. Rules are the same declarative patterns as in
+`META-INF/upgrade/*.hint`:
+
+```
+$ jackpot rewrite --source 21 --rules - src <<'RULES'
+"Prefer Collection.isEmpty":
+$c.size() == 0 :: $c instanceof java.util.Collection
+=> $c.isEmpty()
+;;
+RULES
+```
+
+Commands: `scan` (report matches, never writes), `rewrite` (apply in place;
+`--dry-run` to report only, `--diff-only` for a `git apply`-able patch),
+`try` (match a rule against a snippet and explain a non-match),
+`inspections` (built-in inspections usable with `--inspection <name>`),
+`doctor` and `context` (the compilation context; `--maven`/`--gradle` derive
+it from the build, offline). `--json` prints one JSON document on stdout;
+exit codes distinguish usage errors, rule errors, context problems and
+incomplete rewrites. Files changed by `rewrite` are re-compiled and errors
+introduced by the rewrite are reported. Rules containing `<? ... ?>` Java
+are refused unless `--allow-embedded-java` is given.
+
+```
+$ jackpot help
+```
+
 ### Example
 
 Consider this sample code:

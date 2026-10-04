@@ -353,7 +353,7 @@ final class BuildContext {
             Group g = null;
             for (String line : result.output.split("\n")) {
                 line = line.replaceAll("\u001b\\[[0-9;]*m", "").trim();
-                if (line.startsWith("JACKPOT-MODULE ")) g = new Group(line.substring(15).trim());
+                if (line.startsWith("JACKPOT-MODULE ")) { String path = line.substring(15).trim(); g = new Group(":".equals(path) ? "." : path); }
                 else if (g == null) continue;
                 else if (line.startsWith("JACKPOT-ROOT ")) { Path r = Path.of(line.substring(13).trim()); if (Files.isDirectory(r)) g.roots.add(r.normalize()); }
                 else if (line.startsWith("JACKPOT-SOURCE ")) g.sourceLevel = line.substring(15).trim();

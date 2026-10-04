@@ -1,6 +1,6 @@
 ---
-name: Jackpot semantic refactoring
-description: Apply pattern-based rules to Java source as AST-verified batch transforms. Use when a change repeats across files or must respect Java bindings (overloads, types, scopes) rather than plain text matching. A rule is one reviewable artifact that scans or rewrites an entire source tree at once.
+name: Jackpot semantic search and rewrite
+description: Find or rewrite Java code by what it means, not what it says. A rule is a Java pattern plus conditions on resolved types and bindings; `scan` reports every match across a source tree (a semantic grep), `rewrite` replaces them in one AST-verified pass. Use for questions like "where is this method called on that type" and for changes that repeat across files or depend on overloads, types or scopes rather than text.
 ---
 <!--
 
@@ -25,16 +25,16 @@ description: Apply pattern-based rules to Java source as AST-verified batch tran
 
 # Jackpot
 
-Jackpot is a batch transformation tool for Java. You write one **rule**: a
-Java pattern plus a replacement. Jackpot parses both against real javac syntax
-trees and rewrites every match across a source tree in a single pass. Matching
-is by binding and type, not by text, so an overloaded method, a same-named
-symbol in another scope, or identical-looking text in an unrelated context are
-told apart correctly.
+Jackpot is a search-and-rewrite tool for Java that works on resolved javac
+syntax trees. You write one **rule**: a Java pattern, optional conditions, and
+optionally a replacement. `scan` reports every place the rule matches across a
+source tree; `rewrite` replaces them in a single pass. Matching is by binding
+and type, not by text, so an overloaded method, a same-named symbol in another
+scope, or identical-looking text in an unrelated context are told apart.
 
-Rule of thumb: if the change is "replace every occurrence of pattern P with
-R", or "every call to this API with that API", write a rule and run it once.
-A rule without a replacement is a query that reports match locations.
+Rule of thumb: if the question is "where is P used, on this type" or the
+change is "replace every P with R", write a rule and run it once. A rule
+without a replacement is a query — a grep that understands Java.
 
 ## When to use it — and when not
 
@@ -42,7 +42,9 @@ Use Jackpot when the match depends on **meaning**: the receiver's type, which
 overload is called, whether a variable is used in a block, what the enclosing
 class or package is. A regexp or a syntax-only tool can find `foo(x)`; a rule
 can find *this* `foo` on *this* resolved type, and leave the identically
-spelled call on an unrelated class alone.
+spelled call on an unrelated class alone. That holds for searching as much as
+for rewriting: "all `get(0)` calls on a `List`", "all methods of this class",
+"all loops whose index is never read" are one `scan` each.
 
 Do not reach for it when the change is purely about **shape** — renaming a
 string, swapping `System.err` for `System.out`, reformatting — and no condition
@@ -211,7 +213,15 @@ runs in-process. The tool refuses them (`JACKPOT_RULE_EMBEDDED_JAVA`) unless
 
 ## Examples (all verified against the tool)
 
-Type-constrained — the typical case. Matches `list.size() == 0` but not an
+Searching — a rule with no `=>` is a query; `scan` lists the matches, `--json`
+gives their ranges:
+
+```
+"get(0) on a List": $l.get(0) :: $l instanceof java.util.List ;;
+"methods of Demo":  $mods$ $ret $name($params$) { $body$; } :: inClass("demo.Demo") ;;
+```
+
+Type-constrained rewrite — the typical case. Matches `list.size() == 0` but not an
 unrelated class that also happens to have a `size()` method:
 
 ```

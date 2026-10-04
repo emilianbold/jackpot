@@ -374,7 +374,7 @@ public class Main {
         }
     }
 
-    private static String[] inlineParameterFiles(String... args) {
+    static String[] inlineParameterFiles(String... args) {
         List<String> inlinedArgs = new ArrayList<>();
 
         for (String arg : args) {

@@ -103,7 +103,7 @@ public class AgentMain {
 
     static final String TOOL_VERSION = "31.0-agent.1";
 
-    private static final Set<String> COMMANDS = new TreeSet<>(Arrays.asList("scan", "rewrite", "try", "inspections", "doctor", "help"));
+    private static final Set<String> COMMANDS = new TreeSet<>(Arrays.asList("scan", "rewrite", "try", "inspections", "doctor", "context", "help"));
 
     public static void main(String... args) throws Exception {
         System.exit(run(args));
@@ -127,7 +127,13 @@ public class AgentMain {
             return EXIT_USAGE;
         }
 
-        String[] rest = Arrays.copyOfRange(args, 1, args.length);
+        String[] rest;
+        try {
+            rest = Main.inlineParameterFiles(Arrays.copyOfRange(args, 1, args.length)); //@file argfiles
+        } catch (OptionException ex) {
+            System.err.println("jackpot " + command + ": cannot read argument file: " + ex.getCause());
+            return EXIT_USAGE;
+        }
 
         System.setProperty("netbeans.user", Files.createTempDirectory("jackpot-user").toString());
         System.setProperty("SourcePath.no.source.filter", "true");
@@ -142,6 +148,8 @@ public class AgentMain {
         ArgumentAcceptingOptionSpec<File> javaFileOpt = parser.accepts("java-file", "(try) file with the Java snippet").withRequiredArg().ofType(File.class);
         ArgumentAcceptingOptionSpec<File> sinceDiff = parser.accepts("since-diff", "only match code on lines added by this unified diff").withRequiredArg().ofType(File.class);
         ArgumentAcceptingOptionSpec<File> cache = parser.accepts("cache", "persistent index cache directory").withRequiredArg().ofType(File.class);
+        ArgumentAcceptingOptionSpec<String> mavenOpt = parser.accepts("maven", "derive roots, source level and classpath from the Maven project in <dir> (default .), offline").withOptionalArg().ofType(String.class);
+        ArgumentAcceptingOptionSpec<String> gradleOpt = parser.accepts("gradle", "derive roots, source level and classpath from the Gradle project in <dir> (default .), offline").withOptionalArg().ofType(String.class);
         parser.accepts("json", "machine-readable output on stdout");
         parser.accepts("dry-run", "(rewrite) compute and report changes, write nothing");
         parser.accepts("diff-only", "(rewrite) like --dry-run, print only the unified diff");
@@ -188,15 +196,19 @@ public class AgentMain {
             org.netbeans.api.project.ui.OpenProjects.getDefault().getOpenProjects();
             RepositoryUpdater.getDefault().start(false);
 
+            BuildTool build = BuildTool.from(parsed, mavenOpt, gradleOpt);
+
             switch (command) {
                 case "inspections":
                     return inspections(report);
+                case "context":
+                    return context(report, build);
                 case "doctor":
-                    return doctor(report, parsed, groupOptions, group);
+                    return doctor(report, parsed, groupOptions, group, build);
                 case "try":
-                    return tryRule(report, parsed, groupOptions, rulesOpt, ruleOpt, javaOpt, javaFileOpt);
+                    return tryRule(report, parsed, groupOptions, build, rulesOpt, ruleOpt, javaOpt, javaFileOpt);
                 default:
-                    return scanOrRewrite(command, report, parsed, groupOptions, group, rulesOpt, ruleOpt, inspectionOpt, sinceDiff);
+                    return scanOrRewrite(command, report, parsed, groupOptions, group, build, rulesOpt, ruleOpt, inspectionOpt, sinceDiff);
             }
         } finally {
             if (deleteCacheDir) {
@@ -217,9 +229,12 @@ public class AgentMain {
         out.println("  try          match rules against a Java snippet (--java '...' or --java-file)");
         out.println("  inspections  list the built-in inspections usable with --inspection");
         out.println("  doctor       report the compilation context the tool would use");
+        out.println("  context      print the context derived from a build (--maven/--gradle) as flags, for an @file");
         out.println();
         out.println("rules:        --rules <file> | --rules - (stdin) | --rule '<text>' (repeatable) | --inspection <name>");
         out.println("context:      --source <level> --classpath <jars> [--sourcepath <roots>] [--group \"<flags> <root>\"]");
+        out.println("              --maven [dir] | --gradle [dir]   ask the build tool (offline; no compile, no download)");
+        out.println("              @file                            read arguments from a file, one per line");
         out.println("output:       --json (stdout is then JSON only; logs go to stderr)");
         out.println("exit codes:   0 ok  1 usage  2 rule error  3 context problem  4 rewrite incomplete  5 matches found (--fail-on-match)");
         out.println();
@@ -253,7 +268,7 @@ public class AgentMain {
         return report.finish(EXIT_OK);
     }
 
-    private static int doctor(Report report, OptionSet parsed, Main.GroupOptions groupOptions, ArgumentAcceptingOptionSpec<String> group) throws IOException {
+    private static int doctor(Report report, OptionSet parsed, Main.GroupOptions groupOptions, ArgumentAcceptingOptionSpec<String> group, BuildTool build) throws Exception {
         Map<String, Object> env = new LinkedHashMap<>();
         env.put("tool", TOOL_VERSION);
         env.put("java", System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")");
@@ -262,12 +277,15 @@ public class AgentMain {
         report.human("tool:       " + TOOL_VERSION);
         report.human("java:       " + env.get("java"));
 
-        List<RootConfiguration> groups = parseGroups(parsed, groupOptions, group, report);
+        List<NamedGroup> groups = parseGroups(parsed, groupOptions, group, build, report);
+        if (groups == null) return report.finish(EXIT_CONTEXT);
         int problems = 0;
         List<Object> ctx = new ArrayList<>();
         int gi = 0;
-        for (RootConfiguration rc : groups) {
+        for (NamedGroup ng : groups) {
+            RootConfiguration rc = ng.rc;
             Map<String, Object> g = new LinkedHashMap<>();
+            g.put("name", ng.name);
             List<String> roots = new ArrayList<>();
             int javaFiles = 0;
             for (Folder f : rc.rootFolders) {
@@ -289,12 +307,12 @@ public class AgentMain {
             g.put("classpath", cp);
             g.put("classpathMissing", missing);
             ctx.add(g);
-            report.human("group " + gi + ":");
+            report.human("group " + gi + " (" + ng.name + "):");
             report.human("  roots:      " + (roots.isEmpty() ? "(none)" : String.join(", ", roots)) + "  (" + javaFiles + " .java files)");
             report.human("  source:     " + rc.sourceLevel + (levelOk ? "" : "  <- unrecognized"));
             report.human("  classpath:  " + (cp.isEmpty() ? "(empty: rules naming library types will not resolve)" : cp.size() + " entries" + (missing.isEmpty() ? "" : ", " + missing.size() + " missing")));
-            if (roots.isEmpty()) {
-                report.diagnostic("error", "JACKPOT_NO_ROOTS", null, "no existing source roots given" + (gi == 0 ? "" : " in --group " + gi));
+            if (roots.isEmpty() && groups.size() == 1) {
+                report.diagnostic("error", "JACKPOT_NO_ROOTS", null, "no existing source roots given");
                 problems++;
             }
             if (!levelOk) {
@@ -311,7 +329,7 @@ public class AgentMain {
         return report.finish(problems == 0 ? EXIT_OK : EXIT_CONTEXT);
     }
 
-    private static int tryRule(Report report, OptionSet parsed, Main.GroupOptions groupOptions,
+    private static int tryRule(Report report, OptionSet parsed, Main.GroupOptions groupOptions, BuildTool build,
                                ArgumentAcceptingOptionSpec<String> rulesOpt, ArgumentAcceptingOptionSpec<String> ruleOpt,
                                ArgumentAcceptingOptionSpec<String> javaOpt, ArgumentAcceptingOptionSpec<File> javaFileOpt) throws Exception {
         String snippet;
@@ -335,7 +353,21 @@ public class AgentMain {
             Files.write(root.resolve("Try.java"), source.getBytes(StandardCharsets.UTF_8));
             report.put("snippetSource", source);
 
-            RootConfiguration rc = new RootConfiguration(parsed, groupOptions, Collections.singletonList(root.toFile()));
+            //the snippet is its own root; a build tool context only contributes its classpath and source level
+            OptionSet ctxParsed = parsed;
+            Main.GroupOptions ctxOptions = groupOptions;
+            if (build != null) {
+                List<BuildContext.Group> bg = build.resolve(report);
+                if (bg == null) return report.finish(EXIT_CONTEXT);
+                BuildContext.Group g = bg.get(0);
+                List<String> args = new ArrayList<>();
+                if (g.sourceLevel != null && !parsed.has(groupOptions.source)) { args.add("--source"); args.add(g.sourceLevel); }
+                if (!g.classpath.isEmpty()) { args.add("--classpath"); args.add(g.classpathString()); }
+                OptionParser cp = new OptionParser();
+                ctxOptions = Main.setupGroupParser(cp);
+                ctxParsed = cp.parse(args.toArray(new String[0]));
+            }
+            RootConfiguration rc = new RootConfiguration(ctxParsed, ctxOptions, Collections.singletonList(root.toFile()));
             List<Match> matches = new ArrayList<>();
             List<MessageImpl> problems = new LinkedList<>();
             Iterable<? extends HintDescription> hints = rules.descriptions;
@@ -384,7 +416,7 @@ public class AgentMain {
     }
 
     private static int scanOrRewrite(String command, Report report, OptionSet parsed, Main.GroupOptions groupOptions,
-                                     ArgumentAcceptingOptionSpec<String> group, ArgumentAcceptingOptionSpec<String> rulesOpt,
+                                     ArgumentAcceptingOptionSpec<String> group, BuildTool build, ArgumentAcceptingOptionSpec<String> rulesOpt,
                                      ArgumentAcceptingOptionSpec<String> ruleOpt, ArgumentAcceptingOptionSpec<String> inspectionOpt,
                                      ArgumentAcceptingOptionSpec<File> sinceDiff) throws Exception {
         boolean rewrite = "rewrite".equals(command);
@@ -392,7 +424,11 @@ public class AgentMain {
         boolean diffOnly = rewrite && parsed.has("diff-only");
         report.put("dryRun", dryRun);
 
-        List<RootConfiguration> groups = parseGroups(parsed, groupOptions, group, report);
+        List<NamedGroup> named = parseGroups(parsed, groupOptions, group, build, report);
+        if (named == null) return report.finish(EXIT_CONTEXT);
+        List<RootConfiguration> groups = new ArrayList<>();
+        for (NamedGroup ng : named) groups.add(ng.rc);
+        report.put("context", contextJson(named));
         int totalRoots = 0;
         for (RootConfiguration rc : groups) totalRoots += rc.rootFolders.size();
         if (totalRoots == 0) {
@@ -541,20 +577,106 @@ public class AgentMain {
 
     // --- engine plumbing --------------------------------------------------------
 
-    private static List<RootConfiguration> parseGroups(OptionSet parsed, Main.GroupOptions groupOptions, ArgumentAcceptingOptionSpec<String> group, Report report) throws IOException {
-        List<RootConfiguration> groups = new ArrayList<>();
+    static final class NamedGroup {
+        final String name;
+        final RootConfiguration rc;
+        NamedGroup(String name, RootConfiguration rc) { this.name = name; this.rc = rc; }
+    }
+
+    /** @return the contexts to process, or null when a build tool context was requested and could not be derived */
+    private static List<NamedGroup> parseGroups(OptionSet parsed, Main.GroupOptions groupOptions, ArgumentAcceptingOptionSpec<String> group, BuildTool build, Report report) throws Exception {
+        List<NamedGroup> groups = new ArrayList<>();
         for (Object sr : parsed.nonOptionArguments()) {
             if (FileUtil.toFileObject(new File(sr.toString())) == null) {
                 report.diagnostic("error", "JACKPOT_ROOT_NOT_FOUND", null, "source root does not exist: " + sr);
             }
         }
-        groups.add(new RootConfiguration(parsed, groupOptions));
+        RootConfiguration main = new RootConfiguration(parsed, groupOptions);
+        if (!main.rootFolders.isEmpty() || (build == null && !parsed.has(group))) {
+            groups.add(new NamedGroup("command line", main));
+        }
+        int i = 1;
         for (String groupValue : parsed.valuesOf(group)) {
             OptionParser groupParser = new OptionParser();
             Main.GroupOptions go = Main.setupGroupParser(groupParser);
-            groups.add(new RootConfiguration(groupParser.parse(Main.splitGroupArg(groupValue)), go));
+            groups.add(new NamedGroup("--group " + i++, new RootConfiguration(groupParser.parse(Main.splitGroupArg(groupValue)), go)));
+        }
+        if (build != null) {
+            List<BuildContext.Group> derived = build.resolve(report);
+            if (derived == null) return null;
+            for (BuildContext.Group g : derived) {
+                //an explicit --source on the command line overrides the build's
+                if (parsed.has(groupOptions.source)) g.sourceLevel = parsed.valueOf(groupOptions.source);
+                OptionParser groupParser = new OptionParser();
+                Main.GroupOptions go = Main.setupGroupParser(groupParser);
+                groups.add(new NamedGroup(build.kind + ":" + g.module, new RootConfiguration(groupParser.parse(Main.splitGroupArg(g.toGroupArg())), go)));
+            }
         }
         return groups;
+    }
+
+    private static List<Object> contextJson(List<NamedGroup> groups) {
+        List<Object> l = new ArrayList<>();
+        for (NamedGroup ng : groups) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", ng.name);
+            List<String> roots = new ArrayList<>();
+            for (Folder f : ng.rc.rootFolders) roots.add(display(f.getFileObject()));
+            m.put("roots", roots);
+            m.put("source", ng.rc.sourceLevel);
+            m.put("classpathEntries", ng.rc.compileCP.entries().size());
+            l.add(m);
+        }
+        return l;
+    }
+
+    /** A requested build-tool context (--maven / --gradle). */
+    static final class BuildTool {
+        final String kind;
+        final Path dir;
+
+        private BuildTool(String kind, Path dir) { this.kind = kind; this.dir = dir; }
+
+        static BuildTool from(OptionSet parsed, ArgumentAcceptingOptionSpec<String> maven, ArgumentAcceptingOptionSpec<String> gradle) {
+            if (parsed.has(maven)) return new BuildTool("maven", Paths.get(parsed.valueOf(maven) != null ? parsed.valueOf(maven) : ".").toAbsolutePath().normalize());
+            if (parsed.has(gradle)) return new BuildTool("gradle", Paths.get(parsed.valueOf(gradle) != null ? parsed.valueOf(gradle) : ".").toAbsolutePath().normalize());
+            return null;
+        }
+
+        List<BuildContext.Group> resolve(Report report) throws Exception {
+            BuildContext.Diagnostics diag = (severity, code, message) -> report.diagnostic(severity, code, null, message);
+            long start = System.nanoTime();
+            List<BuildContext.Group> groups = "maven".equals(kind) ? BuildContext.maven(dir, diag) : BuildContext.gradle(dir, diag);
+            report.put("buildTool", kind);
+            report.put("buildToolMillis", (System.nanoTime() - start) / 1_000_000);
+            return groups;
+        }
+    }
+
+    private static int context(Report report, BuildTool build) throws Exception {
+        if (build == null) {
+            report.diagnostic("error", "JACKPOT_USAGE", null, "context needs --maven [dir] or --gradle [dir]");
+            return report.finish(EXIT_USAGE);
+        }
+        List<BuildContext.Group> groups = build.resolve(report);
+        if (groups == null) return report.finish(EXIT_CONTEXT);
+        List<Object> json = new ArrayList<>();
+        List<String> args = new ArrayList<>();
+        for (int i = 0; i < groups.size(); i++) {
+            BuildContext.Group g = groups.get(i);
+            json.add(g.toJson());
+            if (i == 0) {
+                args.addAll(g.toArgs());
+            } else {
+                args.add("--group");
+                args.add(g.toGroupArg());
+            }
+        }
+        report.put("groups", json);
+        report.put("args", args);
+        for (String a : args) report.human(a);
+        report.summary("groups", groups.size());
+        return report.finish(EXIT_OK);
     }
 
     /** Finds the occurrences for one group, records the verified matches, and returns the raw result for applying. */

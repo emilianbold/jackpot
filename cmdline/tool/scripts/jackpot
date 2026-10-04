@@ -26,7 +26,7 @@ fi
 # command line; anything else is the original flag-based interface.
 MAIN=org.netbeans.modules.jackpot30.cmdline.Main
 case "$1" in
-    scan|rewrite|try|inspections|doctor|help) MAIN=org.netbeans.modules.jackpot30.cmdline.AgentMain ;;
+    scan|rewrite|try|inspections|doctor|context|help) MAIN=org.netbeans.modules.jackpot30.cmdline.AgentMain ;;
 esac
 exec "$JAVA" -XX:+IgnoreUnrecognizedVMOptions \
      -Djava.awt.headless=true \

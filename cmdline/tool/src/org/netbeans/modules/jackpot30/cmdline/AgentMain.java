@@ -75,7 +75,6 @@ import org.netbeans.modules.refactoring.spi.RefactoringElementImplementation;
 import org.netbeans.spi.editor.hints.ErrorDescription;
 import org.netbeans.spi.editor.hints.Severity;
 import org.netbeans.spi.java.hints.HintContext.MessageKind;
-import org.openide.cookies.EditorCookie;
 import org.openide.filesystems.FileObject;
 import org.openide.filesystems.FileUtil;
 import org.openide.loaders.DataObject;
@@ -765,16 +764,12 @@ public class AgentMain {
         return incomplete;
     }
 
+    /** commit() writes into an open Document instead of the file; see Main.apply(). */
     private static void save(FileObject fo) throws IOException {
-        org.netbeans.api.actions.Savable sc = fo.getLookup().lookup(org.netbeans.api.actions.Savable.class);
-        if (sc != null) {
-            sc.save();
-            return;
-        }
         try {
-            EditorCookie ec = DataObject.find(fo).getLookup().lookup(EditorCookie.class);
-            if (ec != null && ec.isModified()) {
-                ec.saveDocument();
+            org.netbeans.api.actions.Savable sc = DataObject.find(fo).getLookup().lookup(org.netbeans.api.actions.Savable.class);
+            if (sc != null) {
+                sc.save();
             }
         } catch (DataObjectNotFoundException ex) {
             //nothing to save

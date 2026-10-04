@@ -914,21 +914,15 @@ public class Main {
         } else {
             for (ModificationResult mr : diffs) {
                 mr.commit();
-                //ensure all modified files are saved:
+                //ModificationResult.commit() writes into the file's Document instead of
+                //the file when one is open (the engine itself opens one when it resolves
+                //a line number for a warning); without a save the rewrite is lost.
+                //Here a FileObject's lookup does not include the DataObject's Savable.
                 for (FileObject file : mr.getModifiedFileObjects()) {
-                    Savable sc = file.getLookup().lookup(Savable.class);
-                    if (sc != null) {
-                        sc.save();
-                        continue;
-                    }
-                    //commit() writes into the file's Document when one is open
-                    //(e.g. after a line number was resolved); the Savable then
-                    //lives on the DataObject, not on the FileObject:
                     try {
-                        DataObject dobj = DataObject.find(file);
-                        EditorCookie ec = dobj.getLookup().lookup(EditorCookie.class);
-                        if (ec != null && ec.isModified()) {
-                            ec.saveDocument();
+                        Savable sc = DataObject.find(file).getLookup().lookup(Savable.class);
+                        if (sc != null) {
+                            sc.save();
                         }
                     } catch (DataObjectNotFoundException ex) {
                         //no DataObject - nothing to save

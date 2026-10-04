@@ -133,8 +133,8 @@ public class Main {
     private static final String OPTION_NO_APPLY = "no-apply";
     private static final String OPTION_FAIL_ON_WARNINGS = "fail-on-warnings";
     private static final String RUN_TESTS = "run-tests";
-    private static final String SOURCE_LEVEL_DEFAULT = "1.8";
-    private static final String ACCEPTABLE_SOURCE_LEVEL_PATTERN = "(1\\.)?[1-9][0-9]*";
+    static final String SOURCE_LEVEL_DEFAULT = "1.8";
+    static final String ACCEPTABLE_SOURCE_LEVEL_PATTERN = "(1\\.)?[1-9][0-9]*";
     
     public static void main(String... args) throws IOException, ClassNotFoundException {
         System.exit(compile(args));
@@ -407,18 +407,18 @@ public class Main {
                        ClassPathSupport.createClassPath(binaryRoots.toArray(new FileObject[0])));
     }
 
-    private static GroupOptions setupGroupParser(OptionParser parser) {
+    static GroupOptions setupGroupParser(OptionParser parser) {
         return new GroupOptions(parser.accepts("classpath", "classpath").withRequiredArg().withValuesSeparatedBy(File.pathSeparatorChar).ofType(File.class),
                                 parser.accepts("bootclasspath", "bootclasspath").withRequiredArg().withValuesSeparatedBy(File.pathSeparatorChar).ofType(File.class),
                                 parser.accepts("sourcepath", "sourcepath").withRequiredArg().withValuesSeparatedBy(File.pathSeparatorChar).ofType(File.class),
                                 parser.accepts("source", "source level").withRequiredArg().ofType(String.class).defaultsTo(SOURCE_LEVEL_DEFAULT));
     }
 
-    private static final class GroupOptions {
-        private final ArgumentAcceptingOptionSpec<File> classpath;
-        private final ArgumentAcceptingOptionSpec<File> bootclasspath;
-        private final ArgumentAcceptingOptionSpec<File> sourcepath;
-        private final ArgumentAcceptingOptionSpec<String> source;
+    static final class GroupOptions {
+        final ArgumentAcceptingOptionSpec<File> classpath;
+        final ArgumentAcceptingOptionSpec<File> bootclasspath;
+        final ArgumentAcceptingOptionSpec<File> sourcepath;
+        final ArgumentAcceptingOptionSpec<String> source;
 
         public GroupOptions(ArgumentAcceptingOptionSpec<File> classpath, ArgumentAcceptingOptionSpec<File> bootclasspath, ArgumentAcceptingOptionSpec<File> sourcepath, ArgumentAcceptingOptionSpec<String> source) {
             this.classpath = classpath;
@@ -429,7 +429,7 @@ public class Main {
 
     }
 
-    private static Map<HintMetadata, Collection<? extends HintDescription>> listHints(ClassPath sourceFrom, ClassPath binaryFrom) {
+    static Map<HintMetadata, Collection<? extends HintDescription>> listHints(ClassPath sourceFrom, ClassPath binaryFrom) {
         Map<HintMetadata, Collection<? extends HintDescription>> result = new HashMap<HintMetadata, Collection<? extends HintDescription>>();
 
         for (Entry<HintMetadata, ? extends Collection<? extends HintDescription>> entry: RulesManager.getInstance().readHints(null, Arrays.asList(sourceFrom, binaryFrom), null).entrySet()) {
@@ -609,7 +609,7 @@ public class Main {
         }
     }
 
-    private static PatchDescription createPatchDescription(RootConfiguration rootConfiguration, File patchFile) throws IOException {
+    static PatchDescription createPatchDescription(RootConfiguration rootConfiguration, File patchFile) throws IOException {
         Map<FileObject, Set<Integer>> file2AddedLines = new HashMap<>();
         DiffParser p = new UnifiedDiffParser();
         List<Diff> diffs = p.parse(patchFile);
@@ -653,7 +653,7 @@ public class Main {
         return new PatchDescription(file2AddedLines);
     }
 
-    private static Iterable<? extends HintDescription> filterHints(Iterable<? extends HintDescription> hints, PatchDescription patch) {
+    static Iterable<? extends HintDescription> filterHints(Iterable<? extends HintDescription> hints, PatchDescription patch) {
         class FilteringWorker implements Worker {
             private final PatchDescription patch;
             private final Worker delegate;
@@ -682,7 +682,7 @@ public class Main {
                             .collect(Collectors.toList());
     }
 
-    private static BatchResult filterBatchResult(BatchResult result, PatchDescription patch) {
+    static BatchResult filterBatchResult(BatchResult result, PatchDescription patch) {
         try {
             if (patch == null) return result;
             Field f = result.getClass().getDeclaredField("projectId2Resources");
@@ -698,7 +698,7 @@ public class Main {
         }
     }
 
-    private static class MemoryPreferences extends AbstractPreferences {
+    static class MemoryPreferences extends AbstractPreferences {
 
         private final Map<String, String> values = new HashMap<>();
         private final Map<String, MemoryPreferences> nodes = new HashMap<>();
@@ -791,7 +791,7 @@ public class Main {
         public abstract GroupResult join(GroupResult other);
     }
     
-    private static Iterable<? extends HintDescription> findHints(ClassPath sourceFrom, ClassPath binaryFrom, String name, HintsSettings toEnableIn) {
+    static Iterable<? extends HintDescription> findHints(ClassPath sourceFrom, ClassPath binaryFrom, String name, HintsSettings toEnableIn) {
         List<HintDescription> descs = new LinkedList<HintDescription>();
 
         for (Entry<HintMetadata, Collection<? extends HintDescription>> e : listHints(sourceFrom, binaryFrom).entrySet()) {
@@ -839,7 +839,7 @@ public class Main {
 
     private static final Logger TOP_LOGGER = Logger.getLogger("");
 
-    private static void prepareLoggers() {
+    static void prepareLoggers() {
         TOP_LOGGER.setLevel(Level.OFF);
         System.setProperty("RepositoryUpdate.increasedLogLevel", "OFF");
     }
@@ -952,7 +952,7 @@ public class Main {
         }
     }
 
-    private static ClassPath createClassPath(Iterable<? extends File> roots, ClassPath def) {
+    static ClassPath createClassPath(Iterable<? extends File> roots, ClassPath def) {
         if (roots == null) return def;
 
         List<URL> rootURLs = new ArrayList<URL>();
@@ -1033,21 +1033,34 @@ public class Main {
         private int errors;
     }
 
-    private static final class RootConfiguration {
-        private final List<Folder> rootFolders;
-        private final ClassPath bootCP;
-        private final ClassPath compileCP;
-        private final ClassPath sourceCP;
-        private final ClassPath binaryCP;
-        private final String    sourceLevel;
+    static final class RootConfiguration {
+        final List<Folder> rootFolders;
+        final ClassPath bootCP;
+        final ClassPath compileCP;
+        final ClassPath sourceCP;
+        final ClassPath binaryCP;
+        final String    sourceLevel;
 
         public RootConfiguration(OptionSet parsed, GroupOptions groupOptions) throws IOException {
+            this(parsed, groupOptions, null);
+        }
+
+        /** @param explicitRoots source roots to use instead of the non-option arguments, or null */
+        public RootConfiguration(OptionSet parsed, GroupOptions groupOptions, List<File> explicitRoots) throws IOException {
             this.rootFolders = new ArrayList<>();
 
             List<FileObject> roots = new ArrayList<>();
+            List<File> rootFiles = new ArrayList<>();
 
-            for (String sr : parsed.nonOptionArguments()) {
-                File r = new File(sr);
+            if (explicitRoots != null) {
+                rootFiles.addAll(explicitRoots);
+            } else {
+                for (String sr : parsed.nonOptionArguments()) {
+                    rootFiles.add(new File(sr));
+                }
+            }
+
+            for (File r : rootFiles) {
                 FileObject root = FileUtil.toFileObject(r);
 
                 if (root != null) {
@@ -1100,7 +1113,7 @@ public class Main {
         }
     }
 
-    private static final ThreadLocal<RootConfiguration> currentRootConfiguration = new ThreadLocal<>();
+    static final ThreadLocal<RootConfiguration> currentRootConfiguration = new ThreadLocal<>();
 
     @ServiceProvider(service=ClassPathProvider.class, position=100)
     public static final class ClassPathProviderImpl implements ClassPathProvider {
@@ -1262,8 +1275,8 @@ public class Main {
     
     }
 
-    private static class PatchDescription {
-        private final Map<FileObject, Set<Integer>> file2AddedLines;
+    static class PatchDescription {
+        final Map<FileObject, Set<Integer>> file2AddedLines;
         private final Map<FileObject, int[]> file2LineStarts = new HashMap<>();
 
         private PatchDescription(Map<FileObject, Set<Integer>> file2AddedLines) {

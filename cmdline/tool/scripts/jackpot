@@ -22,10 +22,16 @@ JAVA=java
 if [ -n "$JAVA_HOME" -a -x "$JAVA_HOME/bin/java" ] ; then
     JAVA="$JAVA_HOME/bin/java"
 fi
+# "jackpot scan|rewrite|try|inspections|doctor|help ..." is the agent-oriented
+# command line; anything else is the original flag-based interface.
+MAIN=org.netbeans.modules.jackpot30.cmdline.Main
+case "$1" in
+    scan|rewrite|try|inspections|doctor|help) MAIN=org.netbeans.modules.jackpot30.cmdline.AgentMain ;;
+esac
 exec "$JAVA" -XX:+IgnoreUnrecognizedVMOptions \
      -Djava.awt.headless=true \
      --add-opens=java.base/java.net=ALL-UNNAMED \
      --add-opens=java.desktop/sun.awt=ALL-UNNAMED \
      --add-opens=java.desktop/javax.swing.text=ALL-UNNAMED \
      $JACKPOT_OPTS \
-     -classpath `dirname "$JACKPOT_JAR"`/jackpot.jar org.netbeans.modules.jackpot30.cmdline.Main "$@"
+     -classpath `dirname "$JACKPOT_JAR"`/jackpot.jar $MAIN "$@"

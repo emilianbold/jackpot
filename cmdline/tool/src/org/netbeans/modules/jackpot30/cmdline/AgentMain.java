@@ -397,9 +397,32 @@ public class AgentMain {
                     runScan(rc, bare, bareSettings, null, bareMatches, new LinkedList<>());
                 }
                 if (!bareMatches.isEmpty()) {
-                    why = "the pattern matches " + bareMatches.size() + " place(s) but the conditions (after '::') reject them; check types on the classpath and the condition arguments";
                     report.put("patternOnlyMatches", matchesToJson(bareMatches));
                     report.put("result", "conditions-rejected");
+                    //which condition? drop one at a time (bounded: the snippet root is one file, each probe ~0.5 s)
+                    List<String> culprits = new ArrayList<>();
+                    List<int[]> spans = conditionSpans(rules.text);
+                    if (spans.size() > 1 && spans.size() <= 6) {
+                        for (int[] span : spans) {
+                            String without = rules.text.substring(0, span[0]) + rules.text.substring(span[1]);
+                            without = without.replaceAll("::\\s*(&&\\s*)?(?=(=>|;;))", "").replaceAll("&&\\s*(?=(=>|;;))", "").replaceAll("::\\s*&&", "::");
+                            Iterable<? extends HintDescription> probe = PatternConvertor.create(without);
+                            if (probe == null) continue;
+                            HintsSettings probeSettings = HintsSettings.createPreferencesBasedHintsSettings(new Main.MemoryPreferences(), false, null);
+                            for (HintDescription hd : probe) probeSettings.setEnabled(hd.getMetadata(), true);
+                            List<Match> probeMatches = new ArrayList<>();
+                            runScan(rc, probe, probeSettings, null, probeMatches, new LinkedList<>());
+                            if (!probeMatches.isEmpty()) culprits.add(rules.text.substring(span[0], span[1]).trim());
+                        }
+                    } else if (spans.size() == 1) {
+                        culprits.add(rules.text.substring(spans.get(0)[0], spans.get(0)[1]).trim());
+                    }
+                    if (!culprits.isEmpty()) {
+                        report.put("rejectingConditions", culprits);
+                        why = "the pattern matches " + bareMatches.size() + " place(s) but " + (culprits.size() == 1 ? "this condition rejects it: " : "each of these conditions alone rejects it: ") + String.join(" ; ", culprits) + " - check the types on the classpath and the condition arguments";
+                    } else {
+                        why = "the pattern matches " + bareMatches.size() + " place(s) but the conditions (after '::') reject them in combination; check types on the classpath and the condition arguments";
+                    }
                 } else {
                     why = "the pattern itself does not match; check its shape (expression vs. statement, exact method/argument structure)";
                     report.put("result", "no-match");
@@ -852,6 +875,30 @@ public class AgentMain {
             report.diagnostic("error", "JACKPOT_RULE_UNTERMINATED", origin + ":" + lines.line(off), "the last rule is not terminated: every rule must end with ';;'");
             errors = true;
         }
+        //constructs that parse but do not do what they look like they do:
+        String ruleCode = stripCommentsKeepOffsets(rules);
+        java.util.regex.Matcher brace = Pattern.compile("\\$[A-Za-z_][A-Za-z0-9_]*\\{[A-Za-z_][A-Za-z0-9_.]*\\}").matcher(ruleCode);
+        while (brace.find()) {
+            report.diagnostic("error", "JACKPOT_RULE_BRACE_TYPE", origin + ":" + lines.line(brace.start()) + ":" + lines.column(brace.start()), "'$x{Type}' is a legacy form with different semantics; write ':: $x instanceof fully.qualified.Type' instead");
+            errors = true;
+        }
+        //only inside condition sections ('::' up to the next '=>' or ';;'); '||' is legitimate Java in a pattern
+        java.util.regex.Matcher cond = Pattern.compile("(?s)::((?:(?!=>|;;).)*)").matcher(ruleCode);
+        while (cond.find()) {
+            String section = cond.group(1);
+            int base = cond.start(1);
+            for (String[] footgun : new String[][] {
+                    {"\\|\\|", "JACKPOT_RULE_OR", "'||' is not supported in conditions (only '&&' and '!'); write one rule per alternative"},
+                    {"(?<![A-Za-z0-9_.$])(matches|parentMatches)\\s*\\(", "JACKPOT_RULE_UNSUPPORTED_CONDITION", "'matches(...)' and 'parentMatches(...)' do not work in this engine; use 'matchesAny($x, \"pattern\")' on a bound variable"},
+            }) {
+                java.util.regex.Matcher m = Pattern.compile(footgun[0]).matcher(section);
+                while (m.find()) {
+                    int off = base + m.start();
+                    report.diagnostic("error", footgun[1], origin + ":" + lines.line(off) + ":" + lines.column(off), footgun[2]);
+                    errors = true;
+                }
+            }
+        }
         for (ErrorDescription ed : result.errors) {
             int off = ed.getRange().getBegin().getOffset();
             String description = ed.getDescription();
@@ -897,6 +944,41 @@ public class AgentMain {
             parsedRules.add(m);
         }
         return new Rules(origin, rules, descriptions, settings, parsedRules);
+    }
+
+    /** Blanks comments and string literals, keeping every other character at its offset. */
+    static String stripCommentsKeepOffsets(String text) {
+        StringBuilder sb = new StringBuilder(text);
+        java.util.regex.Matcher m = Pattern.compile("(?s)/\\*.*?\\*/|//[^\n]*|\"(?:[^\"\\\\\n]|\\\\.)*\"").matcher(text);
+        while (m.find()) {
+            for (int i = m.start(); i < m.end(); i++) {
+                if (sb.charAt(i) != '\n') sb.setCharAt(i, ' ');
+            }
+        }
+        return sb.toString();
+    }
+
+    /** Spans of the individual {@code &&}-separated conditions after the first {@code ::} of the (single) rule. */
+    static List<int[]> conditionSpans(String rule) {
+        List<int[]> spans = new ArrayList<>();
+        String code = stripCommentsKeepOffsets(rule);
+        java.util.regex.Matcher m = Pattern.compile("(?s)::((?:(?!=>|;;).)*)").matcher(code);
+        if (!m.find()) return spans;
+        int base = m.start(1);
+        String section = m.group(1);
+        int depth = 0, start = 0;
+        for (int i = 0; i < section.length(); i++) {
+            char c = section.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (depth == 0 && c == '&' && i + 1 < section.length() && section.charAt(i + 1) == '&') {
+                spans.add(new int[] {base + start, base + i});
+                start = i + 2;
+                i++;
+            }
+        }
+        spans.add(new int[] {base + start, base + section.length()});
+        return spans;
     }
 
     /** Removes {@code :: conditions} (pattern and fix conditions) from the rule text, for diagnosing a non-match. */

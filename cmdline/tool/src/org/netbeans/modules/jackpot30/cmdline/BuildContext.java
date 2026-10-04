@@ -310,23 +310,7 @@ final class BuildContext {
 
     // --- Gradle ---------------------------------------------------------------------
 
-    private static final String GRADLE_INIT =
-            "allprojects { p ->\n" +
-            "  p.tasks.register('jackpotContext') {\n" +
-            "    doLast {\n" +
-            "      def ss = p.extensions.findByName('sourceSets')\n" +
-            "      if (ss == null || ss.findByName('main') == null) return\n" +
-            "      def main = ss.getByName('main')\n" +
-            "      def level = null\n" +
-            "      try { def jc = p.tasks.findByName('compileJava'); if (jc != null) { def r = jc.options.release.orNull; level = r != null ? r.toString() : jc.sourceCompatibility } } catch (Throwable t) {}\n" +
-            "      println 'JACKPOT-MODULE ' + p.path\n" +
-            "      main.java.srcDirs.each { println 'JACKPOT-ROOT ' + it.absolutePath }\n" +
-            "      if (level != null) println 'JACKPOT-SOURCE ' + level\n" +
-            "      main.compileClasspath.files.each { println 'JACKPOT-CP ' + it.absolutePath }\n" +
-            "      println 'JACKPOT-END'\n" +
-            "    }\n" +
-            "  }\n" +
-            "}\n";
+    private static final String GRADLE_INIT_RESOURCE = "jackpot-context.init.gradle";
 
     static List<Group> gradle(Path dir, Diagnostics diag) throws IOException, InterruptedException {
         boolean hasBuild = Files.exists(dir.resolve("build.gradle")) || Files.exists(dir.resolve("build.gradle.kts")) || Files.exists(dir.resolve("settings.gradle")) || Files.exists(dir.resolve("settings.gradle.kts"));
@@ -341,7 +325,10 @@ final class BuildContext {
         }
         Path init = Files.createTempFile("jackpot-", ".init.gradle");
         try {
-            Files.write(init, GRADLE_INIT.getBytes(StandardCharsets.UTF_8));
+            try (java.io.InputStream in = BuildContext.class.getResourceAsStream(GRADLE_INIT_RESOURCE)) {
+                if (in == null) throw new IOException("missing resource " + GRADLE_INIT_RESOURCE);
+                Files.copy(in, init, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
             Exec result = exec(Arrays.asList(gradle, "--offline", "-q", "--console=plain", "-I", init.toString(), "jackpotContext"), dir);
             if (result.exitCode != 0) {
                 String out = result.output.replaceAll("\u001b\\[[0-9;]*m", "").trim();

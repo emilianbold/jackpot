@@ -1,0 +1,185 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Builds the standalone tool (launcher + jar + agent skill) and publishes it as
+# a GitHub release of this repository when a tag is pushed. A manual run
+# (workflow_dispatch) builds and smoke-tests the zip and keeps it as a workflow
+# artifact without publishing.
+#
+# This is a build of a fork, not an Apache release.
+
+name: Standalone tool release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and package the standalone tool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        run: |
+            sudo apt-get update -q
+            sudo apt-get install -y -q openjdk-21-jdk ant
+            echo "JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64" >> "$GITHUB_ENV"
+            echo "/usr/lib/jvm/java-21-openjdk-amd64/bin" >> "$GITHUB_PATH"
+
+      - name: Cache NetBeans 31
+        id: netbeans-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/netbeans
+          key: netbeans-31-bin
+
+      - name: Set up NetBeans 31
+        if: steps.netbeans-cache.outputs.cache-hit != 'true'
+        run: |
+            wget -q 'https://dlcdn.apache.org/netbeans/netbeans/31/netbeans-31-bin.zip' -O /tmp/netbeans-31-bin.zip
+            (cd $HOME; unzip -q /tmp/netbeans-31-bin.zip)
+
+      - name: Build modules
+        run: |
+            cd cmdline
+            P="-Dnbplatform.default.harness.dir=$HOME/netbeans/harness -Dnbplatform.default.netbeans.dest.dir=$HOME/netbeans -Djackpot.root=$PWD/.."
+            ant $P build
+            (cd lib && ant $P test-build)
+
+      - name: Run tool tests
+        run: |
+            cd cmdline/tool
+            P="-Dnbplatform.default.harness.dir=$HOME/netbeans/harness -Dnbplatform.default.netbeans.dest.dir=$HOME/netbeans -Djackpot.root=$PWD/../.."
+            ant $P -Dtest.nbjdk.home=$JAVA_HOME -Dcontinue.after.failing.tests=false test
+
+      - name: Create the standalone tool
+        run: |
+            cd cmdline/tool
+            P="-Dnbplatform.default.harness.dir=$HOME/netbeans/harness -Dnbplatform.default.netbeans.dest.dir=$HOME/netbeans -Djackpot.root=$PWD/../.."
+            ant $P -Dcontinue.after.failing.tests=false create-standalone-tool
+
+      - name: Smoke-test the zip
+        run: |
+            set -e
+            rm -rf /tmp/smoke && mkdir -p /tmp/smoke/src/demo && cd /tmp/smoke
+            unzip -q "$GITHUB_WORKSPACE/cmdline/tool/build/jackpot.zip"
+            test -x jackpot/jackpot
+            test -f jackpot/skill/jackpot/SKILL.md
+            test -x jackpot/skill/jackpot/scripts/jackpot
+            cat > src/demo/Demo.java <<'JAVA'
+            package demo;
+            import java.util.List;
+            public class Demo {
+                static class Bag { int size() { return 0; } }
+                boolean a(List<String> l) { return l.size() == 0; }
+                boolean b(Bag b) { return b.size() == 0; }
+                int sum(int[] array) { int t = 0; for (int i = 0; i < array.length; i++) { int v = array[i]; t += v; } return t; }
+            }
+            JAVA
+            jackpot/jackpot help | head -1
+            jackpot/jackpot rewrite --json --source 21 --rules - src > out.json <<'RULES'
+            "Prefer Collection.isEmpty":
+            $c.size() == 0 :: $c instanceof java.util.Collection
+            => $c.isEmpty()
+            ;;
+            "Enhanced for":
+            for (int $i = 0; $i < $array.length; $i++) {
+                $T $var = $array[$i];
+                $stmts$;
+            } :: !referencedIn($i, $stmts$)
+            =>
+            for ($T $var : $array) {
+                $stmts$;
+            }
+            ;;
+            RULES
+            python3 - <<'PY'
+            import json
+            d = json.load(open('out.json'))
+            assert d['status'] == 'ok', d
+            assert d['summary']['matches'] == 2, d['summary']
+            assert d['summary']['filesChanged'] == 1, d['summary']
+            assert d['summary']['introducedErrors'] == 0, d['summary']
+            print('smoke test ok:', d['summary'])
+            PY
+            grep -q 'l.isEmpty()' src/demo/Demo.java
+            grep -q 'for (int v : array)' src/demo/Demo.java
+            javac -d /tmp/smoke/out src/demo/Demo.java
+
+      - name: Name the archive
+        id: name
+        run: |
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME}"; else V="dev-${GITHUB_SHA::7}"; fi
+            cp cmdline/tool/build/jackpot.zip "jackpot-${V}.zip"
+            sha256sum "jackpot-${V}.zip" > "jackpot-${V}.zip.sha256"
+            echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jackpot-${{ steps.name.outputs.version }}
+          path: |
+            jackpot-${{ steps.name.outputs.version }}.zip
+            jackpot-${{ steps.name.outputs.version }}.zip.sha256
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.name.outputs.version }}
+        run: |
+            cat > notes.md <<EOF
+            Standalone Apache NetBeans Jackpot tool with the agent interface and skill, built from this fork's \`${GITHUB_SHA::7}\`.
+
+            **This is a build of a fork, not an Apache Software Foundation release.** It contains Apache NetBeans modules and nb-javac (GPLv2 with Classpath Exception); see LICENSE and NOTICE inside the archive.
+
+            ## Install
+
+            Needs Java 21 or newer.
+
+            \`\`\`
+            unzip jackpot-${V}.zip
+            jackpot/jackpot help
+            \`\`\`
+
+            Put \`jackpot/jackpot\` on your PATH (or set \`JACKPOT\` to it). To teach a coding agent to use it, copy or link \`jackpot/skill/jackpot\` into the agent's skills directory (e.g. \`.opencode/skills/\`, \`.claude/skills/\`).
+
+            ## Try
+
+            \`\`\`
+            jackpot/jackpot rewrite --source 21 --rules - src <<'RULES'
+            "Prefer Collection.isEmpty":
+            \$c.size() == 0 :: \$c instanceof java.util.Collection
+            => \$c.isEmpty()
+            ;;
+            RULES
+            \`\`\`
+            EOF
+            gh release create "$V" "jackpot-${V}.zip" "jackpot-${V}.zip.sha256" \
+              --repo "$GITHUB_REPOSITORY" --title "jackpot ${V}" --notes-file notes.md

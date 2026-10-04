@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# Run Jackpot under a compatible JDK (21-25).
+#
+# The launcher is resolved from, in order:
+#   1. $JACKPOT          - path to a jackpot executable, or a directory containing one
+#   2. `jackpot`         - the command on $PATH
+#
+# A JDK is chosen from, in order:
+#   1. $JACKPOT_JAVA_HOME
+#   2. $JAVA_HOME, if it is JDK 21+
+#   3. a nearby JDK 21/25 (e.g. ~/bin/java-21, /usr/lib/jvm/...)
+# Override either with the environment variables above.
+set -euo pipefail
+
+find_launcher() {
+  if [[ -n "${JACKPOT:-}" ]]; then
+    if [[ -d "$JACKPOT" && -f "$JACKPOT/jackpot" ]]; then
+      printf '%s\n' "$JACKPOT/jackpot"; return 0
+    fi
+    if [[ -f "$JACKPOT" ]]; then
+      printf '%s\n' "$JACKPOT"; return 0
+    fi
+    echo "jackpot: \$JACKPOT does not point at a jackpot launcher: $JACKPOT" >&2
+    return 1
+  fi
+  local on_path
+  on_path=$(command -v jackpot 2>/dev/null || true)
+  if [[ -n "$on_path" ]]; then
+    printf '%s\n' "$on_path"; return 0
+  fi
+  echo "jackpot: no launcher found. Install Jackpot so 'jackpot' is on \$PATH," >&2
+  echo "or set JACKPOT to the launcher's path." >&2
+  return 1
+}
+
+pick_java_home() {
+  local c
+  for c in "${JACKPOT_JAVA_HOME:-}" "${JAVA_HOME:-}" \
+           "$HOME/bin/java-21" "$HOME/bin/java-25"; do
+    [[ -n "$c" && -x "$c/bin/java" ]] && { printf '%s\n' "$c"; return 0; }
+  done
+  for c in /usr/lib/jvm/* /opt/*/jdk*; do
+    [[ -x "$c/bin/java" ]] && { printf '%s\n' "$c"; return 0; }
+  done
+  return 1
+}
+
+launcher=$(find_launcher) || exit 1
+
+if java_home=$(pick_java_home); then
+  export JAVA_HOME="$java_home"
+  export PATH="$JAVA_HOME/bin:$PATH"
+fi
+
+if [[ -x "$launcher" ]]; then
+  exec "$launcher" "$@"
+else
+  exec bash "$launcher" "$@"
+fi

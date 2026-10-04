@@ -91,6 +91,13 @@ are refused unless `--allow-embedded-java` is given.
 $ jackpot help
 ```
 
+`skill/jackpot-refactor/` contains an agent skill (a `SKILL.md` in the format
+used by OpenCode, Claude Code and similar tools) that teaches a coding agent
+when and how to use this interface, with verified rule examples. Copy or link
+the directory into the agent's skills folder (e.g. `.opencode/skills/`,
+`.claude/skills/`); its `scripts/jackpot` wrapper finds the launcher through
+`$JACKPOT` or `jackpot` on `PATH` and selects a Java 21+ runtime.
+
 ### Example
 
 Consider this sample code:

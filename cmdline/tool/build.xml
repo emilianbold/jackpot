@@ -76,6 +76,11 @@
                 <exclude name="hints" />
                 <exclude name="jackpot" />
             </zipfileset>
+            <!-- the coding-agent skill: instructions for using the command-based interface -->
+            <zipfileset dir="skill" prefix="jackpot/skill">
+                <exclude name="**/scripts/jackpot" />
+            </zipfileset>
+            <zipfileset file="skill/jackpot-refactor/scripts/jackpot" filemode="755" fullpath="jackpot/skill/jackpot-refactor/scripts/jackpot"/>
         </zip>
         <zip destfile="${build.classes.dir}/../jackpot-sources.zip">
             <zipfileset dir="src"/>

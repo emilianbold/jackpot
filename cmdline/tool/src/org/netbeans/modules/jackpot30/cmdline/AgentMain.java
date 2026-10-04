@@ -155,6 +155,7 @@ public class AgentMain {
         parser.accepts("diff-only", "(rewrite) like --dry-run, print only the unified diff");
         parser.accepts("fail-on-match", "(scan) exit " + EXIT_MATCHES_FOUND + " when there are matches");
         parser.accepts("allow-embedded-java", "accept rules containing <? ... ?> Java blocks (they run in-process)");
+        parser.accepts("no-verify", "(rewrite) skip re-compiling changed files to report introduced errors");
         parser.accepts("debug", "keep engine logging enabled");
         parser.accepts("help", "print help");
 
@@ -494,6 +495,9 @@ public class AgentMain {
                             String before = fo.asText();
                             String after = mr.getResultingSource(fo);
                             Change c = new Change(fo, mr.getDifferences(fo).size(), UnifiedDiff.of(display(fo), before, after));
+                            c.before = before;
+                            c.after = after;
+                            c.context = rc;
                             changes.add(c);
                         }
                         if (!dryRun) {
@@ -511,6 +515,13 @@ public class AgentMain {
         }
 
         boolean incomplete = engineProblems(problems, report);
+
+        int introducedErrors = 0;
+        if (rewrite && !parsed.has("no-verify")) {
+            for (Change c : changes) {
+                introducedErrors += Verifier.introducedErrors(c, report);
+            }
+        }
 
         matches.sort(Comparator.comparing((Match m) -> m.file).thenComparingInt(m -> m.startOffset));
         report.put("matches", matchesToJson(matches));
@@ -545,13 +556,18 @@ public class AgentMain {
             report.human(diff.toString().trim());
             if (!diffOnly) {
                 report.human("");
-                report.human((dryRun ? "would change " : "changed ") + changes.size() + " file(s) (+" + added + "/-" + removed + " lines) from " + matches.size() + " match(es) in " + filesScanned + " file(s)" + (incomplete ? " - INCOMPLETE, see diagnostics" : ""));
+                report.human((dryRun ? "would change " : "changed ") + changes.size() + " file(s) (+" + added + "/-" + removed + " lines) from " + matches.size() + " match(es) in " + filesScanned + " file(s)"
+                        + (incomplete ? " - INCOMPLETE, see diagnostics" : "")
+                        + (introducedErrors > 0 ? " - " + introducedErrors + " NEW COMPILE ERROR(S), see diagnostics" : ""));
             }
             report.summary("filesScanned", filesScanned);
             report.summary("matches", matches.size());
             report.summary("filesChanged", changes.size());
             report.summary("linesAdded", added);
             report.summary("linesRemoved", removed);
+            if (!parsed.has("no-verify")) {
+                report.summary("introducedErrors", introducedErrors);
+            }
             report.summary("written", dryRun ? 0 : changes.size());
             if (incomplete) {
                 return report.finish(EXIT_REWRITE_FAILED);
@@ -970,6 +986,8 @@ public class AgentMain {
         final String diff;
         final int linesAdded, linesRemoved;
         boolean written;
+        String before, after;
+        RootConfiguration context;
 
         Change(FileObject file, int textEdits, String diff) {
             this.file = file;
@@ -1018,6 +1036,81 @@ public class AgentMain {
             int end = li + 1 < starts.length ? starts[li + 1] - 1 : text.length();
             if (end > 0 && end <= text.length() && end > starts[li] && text.charAt(end - 1) == '\r') end--;
             return text.substring(starts[li], Math.max(starts[li], end));
+        }
+    }
+
+    // --- verification -----------------------------------------------------------------
+
+    /**
+     * Re-attributes a changed file and reports the compile errors that the
+     * rewrite introduced (errors already present in the original are ignored).
+     * The engine does not type-check replacements, so a replacement can refer to
+     * a method the receiver does not have; this makes that visible.
+     */
+    static final class Verifier {
+
+        static int introducedErrors(Change c, Report report) {
+            try {
+                Set<String> before = errors(c.context, c.file, c.before);
+                List<javax.tools.Diagnostic> after = diagnostics(c.context, c.file, c.after);
+                LineTable lines = new LineTable(c.after);
+                int count = 0;
+                for (javax.tools.Diagnostic d : after) {
+                    if (d.getKind() != javax.tools.Diagnostic.Kind.ERROR) continue;
+                    String message = d.getMessage(null);
+                    if (before.contains(message)) continue;
+                    int off = (int) Math.max(0, Math.min(d.getStartPosition(), c.after.length()));
+                    report.diagnostic("error", "JACKPOT_INTRODUCED_ERROR", display(c.file) + ":" + lines.line(off) + ":" + lines.column(off), message + " - the rewritten code does not compile; the replacement is wrong for this receiver, or the project needs a different --source/--classpath");
+                    count++;
+                }
+                return count;
+            } catch (IOException | RuntimeException ex) {
+                report.diagnostic("warning", "JACKPOT_VERIFY_FAILED", display(c.file), "could not re-compile the changed file to verify it: " + ex);
+                return 0;
+            }
+        }
+
+        private static Set<String> errors(RootConfiguration rc, FileObject original, String text) throws IOException {
+            Set<String> s = new java.util.HashSet<>();
+            for (javax.tools.Diagnostic d : diagnostics(rc, original, text)) {
+                if (d.getKind() == javax.tools.Diagnostic.Kind.ERROR) s.add(d.getMessage(null));
+            }
+            return s;
+        }
+
+        /** Attributes {@code text} as if it were {@code original} (same package path), against the group's classpaths. */
+        private static List<javax.tools.Diagnostic> diagnostics(RootConfiguration rc, FileObject original, String text) throws IOException {
+            FileObject root = rc.sourceCP.findOwnerRoot(original);
+            String relative = root != null ? FileUtil.getRelativePath(root, original) : original.getNameExt();
+            //a shadow copy on disk (JavaSource needs a file: URL) at the same package path;
+            //sibling classes still resolve through the real source path
+            Path tmpRoot = Files.createTempDirectory("jackpot-verify");
+            try {
+                Path copyPath = tmpRoot.resolve(relative);
+                Files.createDirectories(copyPath.getParent());
+                Files.write(copyPath, text.getBytes(StandardCharsets.UTF_8));
+                FileObject tmpRootFO = FileUtil.toFileObject(FileUtil.normalizeFile(tmpRoot.toFile()));
+                FileObject copy = FileUtil.toFileObject(FileUtil.normalizeFile(copyPath.toFile()));
+                ClassPath sources = org.netbeans.spi.java.classpath.support.ClassPathSupport.createProxyClassPath(
+                        org.netbeans.spi.java.classpath.support.ClassPathSupport.createClassPath(tmpRootFO), rc.sourceCP);
+                org.netbeans.api.java.source.ClasspathInfo cpInfo = org.netbeans.api.java.source.ClasspathInfo.create(rc.bootCP, rc.compileCP, sources);
+                org.netbeans.api.java.source.JavaSource js = org.netbeans.api.java.source.JavaSource.create(cpInfo, copy);
+                List<javax.tools.Diagnostic> result = new ArrayList<>();
+                if (js == null) return result;
+                RootConfiguration prev = Main.currentRootConfiguration.get();
+                Main.currentRootConfiguration.set(rc);
+                try {
+                    js.runUserActionTask(cc -> {
+                        cc.toPhase(org.netbeans.api.java.source.JavaSource.Phase.RESOLVED);
+                        result.addAll(cc.getDiagnostics());
+                    }, true);
+                } finally {
+                    Main.currentRootConfiguration.set(prev);
+                }
+                return result;
+            } finally {
+                deleteRecursively(tmpRoot);
+            }
         }
     }
 

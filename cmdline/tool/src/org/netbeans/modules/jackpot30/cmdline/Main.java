@@ -109,8 +109,11 @@ import org.netbeans.spi.java.classpath.support.ClassPathSupport;
 import org.netbeans.spi.java.hints.Hint.Kind;
 import org.netbeans.spi.java.hints.HintContext;
 import org.netbeans.spi.java.queries.SourceLevelQueryImplementation2;
+import org.openide.cookies.EditorCookie;
 import org.openide.filesystems.FileObject;
 import org.openide.filesystems.FileUtil;
+import org.openide.loaders.DataObject;
+import org.openide.loaders.DataObjectNotFoundException;
 import org.openide.text.PositionRef;
 import org.openide.util.Exceptions;
 import org.openide.util.Lookup;
@@ -582,9 +585,13 @@ public class Main {
                 occurrences = filterBatchResult(occurrences, patch);
 
                 if (globalConfig.apply) {
-                    apply(nestedProgress, occurrences, globalConfig.out);
+                    List<MessageImpl> problems = apply(nestedProgress, occurrences, globalConfig.out);
 
-                    return GroupResult.SUCCESS; //TODO: WarningsAndErrors?
+                    for (MessageImpl problem : problems) {
+                        System.err.println(problem.kind.name().toLowerCase() + ": " + problem.text);
+                    }
+
+                    return problems.isEmpty() ? GroupResult.SUCCESS : GroupResult.FAILURE;
                 } else {
                     findOccurrences(nestedProgress, occurrences, hints, wae);
 
@@ -889,7 +896,13 @@ public class Main {
         System.out.println(b);
     }
 
-    private static void apply(ProgressHandleWrapper progress, BatchResult rawOccurrences, Writer out) throws IOException {
+    /**
+     * @return problems reported by the engine while computing or applying the
+     *         fixes; a file whose fix fails produces a problem and keeps all of
+     *         its original content, so a non-empty list means the result is
+     *         incomplete.
+     */
+    private static List<MessageImpl> apply(ProgressHandleWrapper progress, BatchResult rawOccurrences, Writer out) throws IOException {
         List<MessageImpl> problems = new LinkedList<MessageImpl>();
         Collection<ModificationResult> diffs = BatchUtilities.applyFixes(rawOccurrences, progress, new AtomicBoolean(), new ArrayList<RefactoringElementImplementation>(), null, true, problems);
 
@@ -906,10 +919,25 @@ public class Main {
                     Savable sc = file.getLookup().lookup(Savable.class);
                     if (sc != null) {
                         sc.save();
+                        continue;
+                    }
+                    //commit() writes into the file's Document when one is open
+                    //(e.g. after a line number was resolved); the Savable then
+                    //lives on the DataObject, not on the FileObject:
+                    try {
+                        DataObject dobj = DataObject.find(file);
+                        EditorCookie ec = dobj.getLookup().lookup(EditorCookie.class);
+                        if (ec != null && ec.isModified()) {
+                            ec.saveDocument();
+                        }
+                    } catch (DataObjectNotFoundException ex) {
+                        //no DataObject - nothing to save
                     }
                 }
             }
         }
+
+        return problems;
     }
 
     private static void printHints(ClassPath sourceFrom, ClassPath binaryFrom) throws IOException {

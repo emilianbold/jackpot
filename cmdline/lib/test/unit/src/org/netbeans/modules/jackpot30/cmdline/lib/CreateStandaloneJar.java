@@ -159,6 +159,10 @@ public abstract class CreateStandaloneJar extends NbTestCase {
         Info info = computeInfo();
 
         toProcess.addAll(info.additionalRoots);
+        //document services needed by ModificationResult.commit and CasualDiff
+        //when a Document exists for a file; registered as named services below:
+        toProcess.add(StandaloneTools.BaseDocumentServices.class.getName());
+        toProcess.add("org.netbeans.modules.editor.document.StubImpl$F");
 
         Set<String> done = new HashSet<String>();
         Set<String> bundlesToCopy = new HashSet<String>();
@@ -307,6 +311,33 @@ public abstract class CreateStandaloneJar extends NbTestCase {
             addMETA_INFRegistration(out, info, e.getValue());
         }
 
+        //named services (@ServiceProvider(path=...)), not discoverable from the class closure:
+        Set<String> namedServices = new HashSet<String>(info.copyNamedServices);
+        namedServices.add("Editors/Documents/org.netbeans.editor.BaseDocument/org.netbeans.modules.editor.document.implspi.DocumentServiceFactory");
+        namedServices.add("Editors/Documents/javax.swing.text.Document/org.netbeans.modules.editor.document.implspi.DocumentServiceFactory");
+
+        for (String namedService : namedServices) {
+            String resourceName = "META-INF/namedservices/" + namedService;
+            Enumeration<URL> resources = this.getClass().getClassLoader().getResources(resourceName);
+
+            StringBuilder content = new StringBuilder();
+
+            while (resources.hasMoreElements()) {
+                //keep only implementations that are part of the standalone jar;
+                //MetaInfServicesLookup rejects the whole file if one class is missing:
+                for (String line : new String(readFile(resources.nextElement()), "UTF-8").split("\n")) {
+                    String impl = line.trim();
+                    if (impl.isEmpty() || impl.startsWith("#") || out.containsKey(escapeJavaxLang(info, impl.replace('.', '/') + ".class"))) {
+                        content.append(line).append("\n");
+                    }
+                }
+            }
+
+            if (content.length() > 0) {
+                out.put(resourceName, content.toString().getBytes("UTF-8"));
+            }
+        }
+
         URL ctSym = this.getClass().getClassLoader().getResource("META-INF/ct.sym");
         FileObject ctSymFO = NBJRTURLMapper.findFileObject(ctSym);
         FileObject root = ctSymFO.getParent().getParent();
@@ -347,6 +378,7 @@ public abstract class CreateStandaloneJar extends NbTestCase {
         private final Set<String> additionalLayers = new HashSet<String>();
         private final List<MetaInfRegistration> metaInf = new LinkedList<MetaInfRegistration>();
         private final Set<String> copyMetaInfRegistration = new HashSet<String>();
+        private final Set<String> copyNamedServices = new HashSet<String>();
         private       boolean escapeJavaxLang;
         private final List<Pattern> exclude = new LinkedList<Pattern>();
         public Info() {}
@@ -364,6 +396,15 @@ public abstract class CreateStandaloneJar extends NbTestCase {
         }
         public Info addMetaInfRegistrations(MetaInfRegistration... registrations) {
             metaInf.addAll(Arrays.asList(registrations));
+            return this;
+        }
+        /**
+         * Copies named-service registrations ({@code @ServiceProvider(path=...)}),
+         * i.e. {@code META-INF/namedservices/<path>/<api-fqn>} resources, which the
+         * class-closure scan cannot discover.
+         */
+        public Info addNamedServicesToCopy(String... pathAndApi) {
+            copyNamedServices.addAll(Arrays.asList(pathAndApi));
             return this;
         }
         public Info addMetaInfRegistrationToCopy(String... registrationsToCopy) {

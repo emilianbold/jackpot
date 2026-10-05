@@ -163,6 +163,10 @@ public abstract class CreateStandaloneJar extends NbTestCase {
         //when a Document exists for a file; registered as named services below:
         toProcess.add(StandaloneTools.BaseDocumentServices.class.getName());
         toProcess.add("org.netbeans.modules.editor.document.StubImpl$F");
+        //memory: URLs (FileUtil.createMemoryFileSystem) need the handler registered as a
+        //named service and the factory that resolves URLStreamHandler/<protocol> services:
+        toProcess.add("org.netbeans.modules.openide.util.ProxyURLStreamHandlerFactory");
+        toProcess.add("org.openide.filesystems.MemoryFileSystem$Handler");
 
         Set<String> done = new HashSet<String>();
         Set<String> bundlesToCopy = new HashSet<String>();
@@ -286,6 +290,7 @@ public abstract class CreateStandaloneJar extends NbTestCase {
         registrations.add(new MetaInfRegistration(MutexEventProvider.class.getName(), NbMutexEventProvider.class.getName()));
         registrations.add(new MetaInfRegistration(CompilerOptionsQueryImplementation.class.getName(), ModuleOraculum.class.getName()));
         registrations.add(new MetaInfRegistration(URLStreamHandlerFactory.class.getName(), NBJRTURLStreamHandler.FactoryImpl.class.getName()));
+        registrations.add(new MetaInfRegistration(URLStreamHandlerFactory.class.getName(), "org.netbeans.modules.openide.util.ProxyURLStreamHandlerFactory"));
         registrations.add(new MetaInfRegistration(ContextEnhancer.class.getName(), JavacParser.VanillaJavacContextEnhancer.class.getName()));
         registrations.add(new MetaInfRegistration(Repository.class.getName(), RepositoryImpl.class.getName()));
         registrations.add(new MetaInfRegistration(RulesManager.class.getName(), RulesManagerImpl.class.getName()));
@@ -315,6 +320,7 @@ public abstract class CreateStandaloneJar extends NbTestCase {
         Set<String> namedServices = new HashSet<String>(info.copyNamedServices);
         namedServices.add("Editors/Documents/org.netbeans.editor.BaseDocument/org.netbeans.modules.editor.document.implspi.DocumentServiceFactory");
         namedServices.add("Editors/Documents/javax.swing.text.Document/org.netbeans.modules.editor.document.implspi.DocumentServiceFactory");
+        namedServices.add("URLStreamHandler/memory/java.net.URLStreamHandler");
 
         for (String namedService : namedServices) {
             String resourceName = "META-INF/namedservices/" + namedService;

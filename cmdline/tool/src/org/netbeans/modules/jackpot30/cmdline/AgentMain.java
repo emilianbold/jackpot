@@ -978,9 +978,7 @@ public class AgentMain {
      * names javac cannot resolve. Such a pattern can never match: patterns are
      * resolved without the scanned sources' imports, so a bare {@code List} or an
      * implicit-this method call resolves to nothing. Mirrors what the IDE's rule
-     * editor does to underline these ({@code idebinding.HintsTask.computeErrors});
-     * unlike there, the scratch file is on disk because JavaSource rejects the
-     * memory file system URL in this standalone setup.
+     * editor does to underline these ({@code idebinding.HintsTask.computeErrors}).
      *
      * @return number of unresolved names reported
      */
@@ -988,12 +986,12 @@ public class AgentMain {
         if (rules.parsed == null || rules.text == null) return 0;
         int[] count = {0};
         Set<String> seen = new java.util.HashSet<>(); //the engine parses a pattern several ways and repeats errors
-        Path tmpRoot = null;
         try {
-            tmpRoot = Files.createTempDirectory("jackpot-rules");
-            Path scratch = tmpRoot.resolve("Scratch.java");
-            Files.write(scratch, "class Scratch {}".getBytes(StandardCharsets.UTF_8));
-            FileObject scratchFO = FileUtil.toFileObject(FileUtil.normalizeFile(scratch.toFile()));
+            //a top-level class is needed: Hacks.parseFQNType resolves the condition types in its scope
+            FileObject scratchFO = FileUtil.createMemoryFileSystem().getRoot().createData("Scratch.java");
+            try (java.io.OutputStream os = scratchFO.getOutputStream()) {
+                os.write("class Scratch {}".getBytes(StandardCharsets.UTF_8));
+            }
             org.netbeans.api.java.source.ClasspathInfo cpInfo = org.netbeans.api.java.source.ClasspathInfo.create(rc.bootCP, rc.compileCP, rc.sourceCP);
             org.netbeans.api.java.source.JavaSource js = org.netbeans.api.java.source.JavaSource.create(cpInfo, scratchFO);
             if (js == null) return 0;
@@ -1071,8 +1069,6 @@ public class AgentMain {
             }
         } catch (IOException | RuntimeException ex) {
             report.diagnostic("warning", "JACKPOT_VERIFY_FAILED", rules.origin, "could not check the patterns for unresolved names: " + ex);
-        } finally {
-            if (tmpRoot != null) deleteRecursively(tmpRoot);
         }
         return count[0];
     }
@@ -1299,35 +1295,30 @@ public class AgentMain {
         private static List<javax.tools.Diagnostic> diagnostics(RootConfiguration rc, FileObject original, String text) throws IOException {
             FileObject root = rc.sourceCP.findOwnerRoot(original);
             String relative = root != null ? FileUtil.getRelativePath(root, original) : original.getNameExt();
-            //a shadow copy on disk (JavaSource needs a file: URL) at the same package path;
+            //a shadow copy at the same package path in a memory file system;
             //sibling classes still resolve through the real source path
-            Path tmpRoot = Files.createTempDirectory("jackpot-verify");
-            try {
-                Path copyPath = tmpRoot.resolve(relative);
-                Files.createDirectories(copyPath.getParent());
-                Files.write(copyPath, text.getBytes(StandardCharsets.UTF_8));
-                FileObject tmpRootFO = FileUtil.toFileObject(FileUtil.normalizeFile(tmpRoot.toFile()));
-                FileObject copy = FileUtil.toFileObject(FileUtil.normalizeFile(copyPath.toFile()));
-                ClassPath sources = org.netbeans.spi.java.classpath.support.ClassPathSupport.createProxyClassPath(
-                        org.netbeans.spi.java.classpath.support.ClassPathSupport.createClassPath(tmpRootFO), rc.sourceCP);
-                org.netbeans.api.java.source.ClasspathInfo cpInfo = org.netbeans.api.java.source.ClasspathInfo.create(rc.bootCP, rc.compileCP, sources);
-                org.netbeans.api.java.source.JavaSource js = org.netbeans.api.java.source.JavaSource.create(cpInfo, copy);
-                List<javax.tools.Diagnostic> result = new ArrayList<>();
-                if (js == null) return result;
-                RootConfiguration prev = Main.currentRootConfiguration.get();
-                Main.currentRootConfiguration.set(rc);
-                try {
-                    js.runUserActionTask(cc -> {
-                        cc.toPhase(org.netbeans.api.java.source.JavaSource.Phase.RESOLVED);
-                        result.addAll(cc.getDiagnostics());
-                    }, true);
-                } finally {
-                    Main.currentRootConfiguration.set(prev);
-                }
-                return result;
-            } finally {
-                deleteRecursively(tmpRoot);
+            FileObject memRoot = FileUtil.createMemoryFileSystem().getRoot();
+            FileObject copy = FileUtil.createData(memRoot, relative);
+            try (java.io.OutputStream os = copy.getOutputStream()) {
+                os.write(text.getBytes(StandardCharsets.UTF_8));
             }
+            ClassPath sources = org.netbeans.spi.java.classpath.support.ClassPathSupport.createProxyClassPath(
+                    org.netbeans.spi.java.classpath.support.ClassPathSupport.createClassPath(memRoot), rc.sourceCP);
+            org.netbeans.api.java.source.ClasspathInfo cpInfo = org.netbeans.api.java.source.ClasspathInfo.create(rc.bootCP, rc.compileCP, sources);
+            org.netbeans.api.java.source.JavaSource js = org.netbeans.api.java.source.JavaSource.create(cpInfo, copy);
+            List<javax.tools.Diagnostic> result = new ArrayList<>();
+            if (js == null) return result;
+            RootConfiguration prev = Main.currentRootConfiguration.get();
+            Main.currentRootConfiguration.set(rc);
+            try {
+                js.runUserActionTask(cc -> {
+                    cc.toPhase(org.netbeans.api.java.source.JavaSource.Phase.RESOLVED);
+                    result.addAll(cc.getDiagnostics());
+                }, true);
+            } finally {
+                Main.currentRootConfiguration.set(prev);
+            }
+            return result;
         }
     }
 

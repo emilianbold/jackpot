@@ -363,11 +363,9 @@ public class Main {
             throw new IllegalStateException(e);
         } finally {
             if (deleteCacheDir) {
-                FileObject cacheDirFO = FileUtil.toFileObject(cacheDir);
-
-                if (cacheDirFO != null) {
-                    //TODO: would be better to do j.i.File.delete():
-                    cacheDirFO.delete();
+                //FileObject.delete() can fail on content the file system cache has not seen yet
+                try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(cacheDir.toPath())) {
+                    walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
                 }
             }
         }

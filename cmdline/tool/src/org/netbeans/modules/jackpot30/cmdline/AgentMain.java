@@ -134,7 +134,10 @@ public class AgentMain {
             return EXIT_USAGE;
         }
 
-        System.setProperty("netbeans.user", Files.createTempDirectory("jackpot-user").toString());
+        //the platform wants a user directory; nothing is written to it, so one stable, per-user location
+        Path userDir = Paths.get(System.getProperty("java.io.tmpdir"), "jackpot-" + System.getProperty("user.name", "user"), "userdir");
+        Files.createDirectories(userDir);
+        System.setProperty("netbeans.user", userDir.toString());
         System.setProperty("SourcePath.no.source.filter", "true");
 
         OptionParser parser = new OptionParser();
@@ -212,10 +215,7 @@ public class AgentMain {
             }
         } finally {
             if (deleteCacheDir) {
-                FileObject cacheDirFO = FileUtil.toFileObject(cacheDir);
-                if (cacheDirFO != null) {
-                    cacheDirFO.delete();
-                }
+                deleteRecursively(cacheDir.toPath());
             }
         }
     }

@@ -985,6 +985,7 @@ public class AgentMain {
     static int checkPatternResolution(Rules rules, RootConfiguration rc, Report report) {
         if (rules.parsed == null || rules.text == null) return 0;
         int[] count = {0};
+        Set<String> seen = new java.util.HashSet<>(); //the engine parses a pattern several ways and repeats errors
         Path tmpRoot = null;
         try {
             tmpRoot = Files.createTempDirectory("jackpot-rules");
@@ -1006,6 +1007,18 @@ public class AgentMain {
                     cc.toPhase(org.netbeans.api.java.source.JavaSource.Phase.RESOLVED);
                     for (DeclarativeHintsParser.HintTextDescription hd : parsed.hints) {
                         String code = rules.text.substring(hd.textStart, hd.textEnd);
+                        //a method call without a receiver resolves to nothing in the pattern scope and javac
+                        //stays quiet about it when the arguments are placeholders; it can never match
+                        java.util.regex.Matcher bare = Pattern.compile("(?<![\\w.$@])([a-z]\\w*)\\s*\\(").matcher(stripCommentsKeepOffsets(code));
+                        while (bare.find()) {
+                            String name = bare.group(1);
+                            if (JAVA_KEYWORDS_BEFORE_PAREN.contains(name)) continue;
+                            int off = hd.textStart + bare.start(1);
+                            if (!seen.add(off + ":bare:" + name)) continue;
+                            report.diagnostic("error", "JACKPOT_PATTERN_UNRESOLVED", rules.origin + ":" + lines.line(off) + ":" + lines.column(off),
+                                    "method call without a receiver: " + name + "(...) - the pattern cannot match: an implicit-this call has no receiver to bind and the bare name does not resolve; match the enclosing statement shape instead (e.g. `$x = $e;` with $stmts$ around it and :: inClass(\"...\")), or `$t." + name + "(...)` for calls that have an explicit receiver");
+                            count[0]++;
+                        }
                         Map<String, javax.lang.model.type.TypeMirror> constraints = new LinkedHashMap<>();
                         for (Entry<String, String> e : org.netbeans.modules.java.hints.declarative.Utilities.conditions2Constraints(hd.conditions).entrySet()) {
                             javax.lang.model.type.TypeMirror t = org.netbeans.modules.java.hints.declarative.Hacks.parseFQNType(cc, e.getValue());
@@ -1031,6 +1044,10 @@ public class AgentMain {
                         org.netbeans.modules.java.hints.spiimpl.Utilities.parseAndAttribute(cc, code, scope, errors);
                         for (javax.tools.Diagnostic<? extends javax.tools.JavaFileObject> d : errors) {
                             if (d.getKind() != javax.tools.Diagnostic.Kind.ERROR) continue;
+                            //only resolution failures; type errors against the scratch scope (e.g. a `return $x;`
+                            //pattern in its void method) do not stop the engine from matching
+                            String dcode = String.valueOf(d.getCode());
+                            if (!dcode.startsWith("compiler.err.cant.resolve") && !dcode.equals("compiler.err.doesnt.exist")) continue;
                             String message = d.getMessage(java.util.Locale.ENGLISH).replace("\n", " ").replaceAll("\\s+", " ").trim();
                             //pattern variables ($x, $stmts$) are placeholders, not unresolved names; the engine's
                             //own filter for them (Utilities.parseAndAttribute) misses javac's aligned
@@ -1040,6 +1057,7 @@ public class AgentMain {
                             //the scratch scope's own class shows up as the location; drop that noise from the message
                             message = message.replaceAll(" location: class \\$\\$\\.\\S+", "");
                             int off = hd.textStart + (int) Math.max(0, d.getStartPosition());
+                            if (!seen.add(off + ":" + message)) continue;
                             report.diagnostic("error", "JACKPOT_PATTERN_UNRESOLVED", rules.origin + ":" + lines.line(off) + ":" + lines.column(off),
                                     message + " - the pattern cannot match: names in a pattern are resolved without the sources' imports; use the fully qualified name (java.util.List), bind the receiver with a $variable, or add an <?import ...?> block to the rules; a library type also needs its jar on --classpath");
                             count[0]++;
@@ -1056,6 +1074,9 @@ public class AgentMain {
         }
         return count[0];
     }
+
+    private static final Set<String> JAVA_KEYWORDS_BEFORE_PAREN = new java.util.HashSet<>(Arrays.asList(
+            "if", "for", "while", "do", "switch", "catch", "synchronized", "return", "throw", "new", "this", "super", "assert", "case", "yield", "instanceof"));
 
     /** Blanks comments and string literals, keeping every other character at its offset. */
     static String stripCommentsKeepOffsets(String text) {

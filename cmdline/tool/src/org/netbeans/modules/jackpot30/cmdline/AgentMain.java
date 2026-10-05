@@ -977,8 +977,10 @@ public class AgentMain {
      * the rule file's imports and the {@code instanceof} constraints) and reports
      * names javac cannot resolve. Such a pattern can never match: patterns are
      * resolved without the scanned sources' imports, so a bare {@code List} or an
-     * implicit-this method call resolves to nothing. This is what the IDE's rule
-     * editor underlines ({@code idebinding.HintsTask}); the batch tool never ran it.
+     * implicit-this method call resolves to nothing. Mirrors what the IDE's rule
+     * editor does to underline these ({@code idebinding.HintsTask.computeErrors});
+     * unlike there, the scratch file is on disk because JavaSource rejects the
+     * memory file system URL in this standalone setup.
      *
      * @return number of unresolved names reported
      */

@@ -866,7 +866,20 @@ public class AgentMain {
         String rules = text.toString();
         String origin = String.join(",", origins);
 
-        DeclarativeHintsParser.disableCustomCode = !parsed.has("allow-embedded-java");
+        //<? ... ?> blocks: a leading block of nothing but import statements only widens
+        //name resolution for the patterns and is fine; anything else is Java that would
+        //run in-process and is refused unless --allow-embedded-java is given.
+        boolean onlyImports = true;
+        java.util.regex.Matcher blocks = Pattern.compile("(?s)<\\?(.*?)\\?>").matcher(rules);
+        boolean first = true;
+        while (blocks.find()) {
+            String body = blocks.group(1).trim();
+            boolean importsOnly = first && !body.isEmpty() && body.matches("(?s)(import\\s+(static\\s+)?[\\w.]+(\\.\\*)?\\s*;\\s*)+")
+                    && rules.substring(0, blocks.start()).replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\n]*", "").trim().isEmpty();
+            if (!importsOnly) onlyImports = false;
+            first = false;
+        }
+        DeclarativeHintsParser.disableCustomCode = !parsed.has("allow-embedded-java") && !onlyImports;
 
         //the parser attaches its errors to a FileObject:
         FileObject rulesFile = FileUtil.createMemoryFileSystem().getRoot().createData("rules", "hint");
@@ -996,8 +1009,16 @@ public class AgentMain {
                         Map<String, javax.lang.model.type.TypeMirror> constraints = new LinkedHashMap<>();
                         for (Entry<String, String> e : org.netbeans.modules.java.hints.declarative.Utilities.conditions2Constraints(hd.conditions).entrySet()) {
                             javax.lang.model.type.TypeMirror t = org.netbeans.modules.java.hints.declarative.Hacks.parseFQNType(cc, e.getValue());
-                            if (t != null && t.getKind() != javax.lang.model.type.TypeKind.ERROR) {
-                                constraints.put(e.getKey(), t);
+                            boolean resolvable = t != null && t.getKind() != javax.lang.model.type.TypeKind.ERROR;
+                            if (!resolvable && !imports.isEmpty()) {
+                                //a simple name made visible by the rule file's imports block
+                                Collection<javax.tools.Diagnostic<? extends javax.tools.JavaFileObject>> probe = new ArrayList<>();
+                                com.sun.source.tree.Scope importScope = org.netbeans.modules.java.hints.spiimpl.Utilities.constructScope(cc, Collections.emptyMap(), imports);
+                                org.netbeans.modules.java.hints.spiimpl.Utilities.parseAndAttribute(cc, "(" + e.getValue() + ") null", importScope, probe);
+                                resolvable = probe.stream().noneMatch(d -> d.getKind() == javax.tools.Diagnostic.Kind.ERROR);
+                            }
+                            if (resolvable) {
+                                if (t != null && t.getKind() != javax.lang.model.type.TypeKind.ERROR) constraints.put(e.getKey(), t);
                             } else {
                                 //the engine silently drops a constraint it cannot resolve, and the rule never matches
                                 report.diagnostic("error", "JACKPOT_PATTERN_UNRESOLVED", rules.origin + ":" + lines.line(hd.textStart),

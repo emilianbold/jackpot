@@ -141,7 +141,8 @@ in a replacement are imported and shortened by the engine automatically.
 | `JACKPOT_RULE_UNTERMINATED` | the last rule lacks `;;` |
 | `JACKPOT_RULE_ERROR` at `origin:line:col` | parse error; "unknown condition function" lists the supported ones |
 | `JACKPOT_RULE_OR` / `_BRACE_TYPE` / `_UNSUPPORTED_CONDITION` | `\|\|` in a condition, `$x{Type}`, `matches(`: each message names the working form |
-| `JACKPOT_RULE_EMBEDDED_JAVA` | the rule contains `<? … ?>` Java, refused by default |
+| `JACKPOT_PATTERN_UNRESOLVED` (exit 2) | a name in a pattern or condition does not resolve: use the fully qualified name, an imports block, or put the library jar on `--classpath`; `rewrite` writes nothing until fixed |
+| `JACKPOT_RULE_EMBEDDED_JAVA` | the rule contains `<? … ?>` Java (other than a leading imports block), refused by default |
 | `JACKPOT_NO_ROOTS` / `JACKPOT_ROOT_NOT_FOUND` | a source root is missing |
 | `JACKPOT_CLASSPATH_MISSING` (doctor) | a `--classpath` entry does not exist |
 | `JACKPOT_MAVEN_*` / `JACKPOT_GRADLE_*` (exit 3) | the build tool is missing, or dependencies are not in the local cache yet (run the project's build once) — or pass `--source`/`--classpath`/roots yourself |
@@ -186,6 +187,36 @@ A trailing `$` makes the variable match a *list* of zero or more nodes:
 `$args$` in an argument list, `$params$` in a parameter list, `$stmts$` for a
 run of statements in a block, `$mods$` for modifiers, `$else$` for an optional
 `else` branch.
+
+### Names in a pattern are resolved without imports
+
+The pattern is compiled on its own, not inside the files it will be matched
+against. `java.lang` names work (`String`, `Integer`, `System.gc()`); any
+other type must be written fully qualified — `java.util.List`,
+`java.util.Collections.emptyList()`, `com.acme.Kind.FOO` — in the pattern
+*and* in conditions, or the rule can never match. The tool checks this before
+scanning and reports each offender as `JACKPOT_PATTERN_UNRESOLVED` (exit 2;
+`rewrite` writes nothing until the rules are fixed). Three ways to write it:
+
+- fully qualified: `java.util.Collections.emptyList() => java.util.List.of() ;;`
+  (the engine shortens names in the replacement and adds imports);
+- bind the receiver: `$t.contains($k)` matches by method name whatever `$t`
+  is, so no type needs resolving — add `:: $t instanceof java.util.Set` when
+  the type matters;
+- an imports block at the very top of the rule file, before the first rule:
+  `<?import java.util.List; import java.util.Map;?>` — then `$l instanceof
+  List` works. Only `import` statements are accepted there.
+
+A library type additionally needs its jar on `--classpath` (or `--maven` /
+`--gradle`); the same diagnostic tells you when that is the problem.
+
+**Calls without a receiver cannot be matched directly.** `compute($x)` in a
+pattern has no receiver to bind and the bare name resolves to nothing;
+`$t.compute($x)` and `this.compute($x)` match only calls written with an
+explicit receiver. The tool reports the bare form as unresolved. To find or
+rewrite implicit-`this` calls, match the enclosing shape instead — e.g. the
+statement `$result = $e;` with the surrounding `$stmts$` and `:: inClass("…")`
+— and let the block structure provide the precision.
 
 ### Conditions
 
@@ -267,6 +298,14 @@ $l.get(0) :: $l instanceof java.util.List
 ;;
 ```
 
+A type outside `java.lang` in the pattern itself — fully qualified, as the
+rule above requires; the replacement is shortened to `List.of()` when the
+file already imports `List`:
+
+```
+"Prefer List.of": java.util.Collections.emptyList() => java.util.List.of() ;;
+```
+
 Query and deletion:
 
 ```
@@ -314,7 +353,7 @@ Run `jackpot try` with the rule and a snippet of the code you expect to
 match. It tells you whether the pattern's shape is wrong or whether the
 conditions rejected it. The usual causes:
 
-- A type named in the rule is not resolvable: add the dependency to
-  `--classpath`, or drop the constraint and let it resolve from the sources.
+- `JACKPOT_PATTERN_UNRESOLVED` was reported: a name in the pattern is not
+  fully qualified, or a library type's jar is missing from `--classpath`.
 - `--source` does not match the tree's real level.
 - A sub-pattern inside a condition is a bare identifier (see Conditions).

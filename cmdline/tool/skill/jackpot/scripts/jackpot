@@ -24,8 +24,8 @@
 #      JACKPOT_NO_DOWNLOAD=1 to disable this and get an error instead.
 #
 # The pin is updated by the release workflow after each release.
-JACKPOT_RELEASE="v31.0-agent.3"
-JACKPOT_RELEASE_SHA256="e10b91d8d5c5c19f54a46c2b3e773c2547799a6639ef38af62dddf09c673520b"
+JACKPOT_RELEASE="v31.0-agent.4"
+JACKPOT_RELEASE_SHA256="f1944d65c711e6c311cfd493bd6fbea5c05d4ef3978cedce8ba666e2622bfa7c"
 JACKPOT_RELEASE_URL="https://github.com/emilianbold/jackpot/releases/download/${JACKPOT_RELEASE}/jackpot-${JACKPOT_RELEASE}.zip"
 #
 # A JDK is chosen from, in order:

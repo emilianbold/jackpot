@@ -368,6 +368,11 @@ public class AgentMain {
                 ctxParsed = cp.parse(args.toArray(new String[0]));
             }
             RootConfiguration rc = new RootConfiguration(ctxParsed, ctxOptions, Collections.singletonList(root.toFile()));
+            if (checkPatternResolution(rules, rc, report) > 0) {
+                report.put("result", "unresolved");
+                report.summary("matches", 0);
+                return report.finish(EXIT_RULE_ERROR);
+            }
             List<Match> matches = new ArrayList<>();
             List<MessageImpl> problems = new LinkedList<>();
             Iterable<? extends HintDescription> hints = rules.descriptions;
@@ -445,7 +450,6 @@ public class AgentMain {
         boolean rewrite = "rewrite".equals(command);
         boolean dryRun = rewrite && (parsed.has("dry-run") || parsed.has("diff-only"));
         boolean diffOnly = rewrite && parsed.has("diff-only");
-        report.put("dryRun", dryRun);
 
         List<NamedGroup> named = parseGroups(parsed, groupOptions, group, build, report);
         if (named == null) return report.finish(EXIT_CONTEXT);
@@ -487,6 +491,12 @@ public class AgentMain {
             }
         }
         report.put("rules", rules.describe());
+        int unresolved = checkPatternResolution(rules, groups.get(0), report);
+        if (unresolved > 0 && rewrite && !dryRun) {
+            report.diagnostic("error", "JACKPOT_RULES_NOT_APPLIED", null, "nothing was written: " + unresolved + " name(s) in the rules cannot be resolved, so the rule set is not what you meant; fix them (or run with --dry-run to see what the other rules would do)");
+            dryRun = true;
+        }
+        report.put("dryRun", dryRun);
 
         List<Match> matches = new ArrayList<>();
         List<Change> changes = new ArrayList<>();
@@ -603,10 +613,15 @@ public class AgentMain {
             report.summary("matches", matches.size());
         }
 
-        if (matches.isEmpty()) {
+        if (matches.isEmpty() && unresolved == 0) {
             report.diagnostic("info", "JACKPOT_NO_MATCHES", null, "no matches: if the code clearly contains the pattern, check that --source matches the tree and that every type the rule names is on --classpath (unresolvable types match nothing); `jackpot try` tests a rule against a snippet");
+        } else if (matches.isEmpty()) {
+            report.diagnostic("info", "JACKPOT_NO_MATCHES", null, "no matches - see JACKPOT_PATTERN_UNRESOLVED above");
         }
 
+        if (unresolved > 0) {
+            return report.finish(EXIT_RULE_ERROR);
+        }
         if (!rewrite && parsed.has("fail-on-match") && !matches.isEmpty()) {
             return report.finish(EXIT_MATCHES_FOUND);
         }
@@ -784,6 +799,7 @@ public class AgentMain {
         final Iterable<? extends HintDescription> descriptions;
         final HintsSettings settings;
         final List<Map<String, Object>> parsedRules;
+        DeclarativeHintsParser.Result parsed;
 
         Rules(String origin, Iterable<? extends HintDescription> descriptions, HintsSettings settings, List<Map<String, Object>> parsedRules) {
             this(origin, null, descriptions, settings, parsedRules);
@@ -938,7 +954,86 @@ public class AgentMain {
             m.put("conditions", htd.conditions.size());
             parsedRules.add(m);
         }
-        return new Rules(origin, rules, descriptions, settings, parsedRules);
+        Rules result2 = new Rules(origin, rules, descriptions, settings, parsedRules);
+        result2.parsed = result;
+        return result2;
+    }
+
+    /**
+     * Attributes every rule's pattern the way the engine will (scratch scope with
+     * the rule file's imports and the {@code instanceof} constraints) and reports
+     * names javac cannot resolve. Such a pattern can never match: patterns are
+     * resolved without the scanned sources' imports, so a bare {@code List} or an
+     * implicit-this method call resolves to nothing. This is what the IDE's rule
+     * editor underlines ({@code idebinding.HintsTask}); the batch tool never ran it.
+     *
+     * @return number of unresolved names reported
+     */
+    static int checkPatternResolution(Rules rules, RootConfiguration rc, Report report) {
+        if (rules.parsed == null || rules.text == null) return 0;
+        int[] count = {0};
+        Path tmpRoot = null;
+        try {
+            tmpRoot = Files.createTempDirectory("jackpot-rules");
+            Path scratch = tmpRoot.resolve("Scratch.java");
+            Files.write(scratch, "class Scratch {}".getBytes(StandardCharsets.UTF_8));
+            FileObject scratchFO = FileUtil.toFileObject(FileUtil.normalizeFile(scratch.toFile()));
+            org.netbeans.api.java.source.ClasspathInfo cpInfo = org.netbeans.api.java.source.ClasspathInfo.create(rc.bootCP, rc.compileCP, rc.sourceCP);
+            org.netbeans.api.java.source.JavaSource js = org.netbeans.api.java.source.JavaSource.create(cpInfo, scratchFO);
+            if (js == null) return 0;
+            LineTable lines = new LineTable(rules.text);
+            DeclarativeHintsParser.Result parsed = rules.parsed;
+            List<String> imports = parsed.importsBlock != null
+                    ? Collections.singletonList(rules.text.substring(parsed.importsBlock[0], parsed.importsBlock[1]))
+                    : Collections.emptyList();
+            RootConfiguration prev = Main.currentRootConfiguration.get();
+            Main.currentRootConfiguration.set(rc);
+            try {
+                js.runUserActionTask(cc -> {
+                    cc.toPhase(org.netbeans.api.java.source.JavaSource.Phase.RESOLVED);
+                    for (DeclarativeHintsParser.HintTextDescription hd : parsed.hints) {
+                        String code = rules.text.substring(hd.textStart, hd.textEnd);
+                        Map<String, javax.lang.model.type.TypeMirror> constraints = new LinkedHashMap<>();
+                        for (Entry<String, String> e : org.netbeans.modules.java.hints.declarative.Utilities.conditions2Constraints(hd.conditions).entrySet()) {
+                            javax.lang.model.type.TypeMirror t = org.netbeans.modules.java.hints.declarative.Hacks.parseFQNType(cc, e.getValue());
+                            if (t != null && t.getKind() != javax.lang.model.type.TypeKind.ERROR) {
+                                constraints.put(e.getKey(), t);
+                            } else {
+                                //the engine silently drops a constraint it cannot resolve, and the rule never matches
+                                report.diagnostic("error", "JACKPOT_PATTERN_UNRESOLVED", rules.origin + ":" + lines.line(hd.textStart),
+                                        "type " + e.getValue() + " in the condition on " + e.getKey() + " cannot be resolved - the rule cannot match; if it is a library type, add its jar to --classpath (or use --maven/--gradle); if it is a JDK type, check the spelling and the fully qualified name");
+                                count[0]++;
+                            }
+                        }
+                        Collection<javax.tools.Diagnostic<? extends javax.tools.JavaFileObject>> errors = new ArrayList<>();
+                        com.sun.source.tree.Scope scope = org.netbeans.modules.java.hints.spiimpl.Utilities.constructScope(cc, constraints, imports);
+                        org.netbeans.modules.java.hints.spiimpl.Utilities.parseAndAttribute(cc, code, scope, errors);
+                        for (javax.tools.Diagnostic<? extends javax.tools.JavaFileObject> d : errors) {
+                            if (d.getKind() != javax.tools.Diagnostic.Kind.ERROR) continue;
+                            String message = d.getMessage(java.util.Locale.ENGLISH).replace("\n", " ").replaceAll("\\s+", " ").trim();
+                            //pattern variables ($x, $stmts$) are placeholders, not unresolved names; the engine's
+                            //own filter for them (Utilities.parseAndAttribute) misses javac's aligned
+                            //"symbol:   variable $x" formatting
+                            java.util.regex.Matcher sym = Pattern.compile("symbol: (?:\\w+ )?(\\S+)").matcher(message);
+                            if (sym.find() && sym.group(1).startsWith("$")) continue;
+                            //the scratch scope's own class shows up as the location; drop that noise from the message
+                            message = message.replaceAll(" location: class \\$\\$\\.\\S+", "");
+                            int off = hd.textStart + (int) Math.max(0, d.getStartPosition());
+                            report.diagnostic("error", "JACKPOT_PATTERN_UNRESOLVED", rules.origin + ":" + lines.line(off) + ":" + lines.column(off),
+                                    message + " - the pattern cannot match: names in a pattern are resolved without the sources' imports; use the fully qualified name (java.util.List), bind the receiver with a $variable, or add an <?import ...?> block to the rules; a library type also needs its jar on --classpath");
+                            count[0]++;
+                        }
+                    }
+                }, true);
+            } finally {
+                Main.currentRootConfiguration.set(prev);
+            }
+        } catch (IOException | RuntimeException ex) {
+            report.diagnostic("warning", "JACKPOT_VERIFY_FAILED", rules.origin, "could not check the patterns for unresolved names: " + ex);
+        } finally {
+            if (tmpRoot != null) deleteRecursively(tmpRoot);
+        }
+        return count[0];
     }
 
     /** Blanks comments and string literals, keeping every other character at its offset. */

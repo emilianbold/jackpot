@@ -913,18 +913,18 @@ public class Main {
         } else {
             for (ModificationResult mr : diffs) {
                 mr.commit();
-                //ModificationResult.commit() writes into the file's Document instead of
-                //the file when one is open (the engine itself opens one when it resolves
-                //a line number for a warning); without a save the rewrite is lost.
-                //Here a FileObject's lookup does not include the DataObject's Savable.
                 for (FileObject file : mr.getModifiedFileObjects()) {
+                    Savable sc = null;
                     try {
-                        Savable sc = DataObject.find(file).getLookup().lookup(Savable.class);
-                        if (sc != null) {
-                            sc.save();
-                        }
+                        sc = DataObject.find(file).getLookup().lookup(Savable.class);
                     } catch (DataObjectNotFoundException ex) {
                         //no DataObject - nothing to save
+                    }
+                    if (sc == null) {
+                        sc = file.getLookup().lookup(Savable.class);
+                    }
+                    if (sc != null) {
+                        sc.save();
                     }
                 }
             }

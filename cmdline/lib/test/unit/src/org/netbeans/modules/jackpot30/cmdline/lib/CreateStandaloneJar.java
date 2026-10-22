@@ -30,6 +30,7 @@ import java.io.UnsupportedEncodingException;
 import java.io.Writer;
 import java.net.URL;
 import java.net.URLStreamHandlerFactory;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -325,7 +326,7 @@ public abstract class CreateStandaloneJar extends NbTestCase {
             while (resources.hasMoreElements()) {
                 //keep only implementations that are part of the standalone jar;
                 //MetaInfServicesLookup rejects the whole file if one class is missing:
-                for (String line : new String(readFile(resources.nextElement()), "UTF-8").split("\n")) {
+                for (String line : new String(readFile(resources.nextElement()), StandardCharsets.UTF_8).split("\n")) {
                     String impl = line.trim();
                     if (impl.isEmpty() || impl.startsWith("#") || out.containsKey(escapeJavaxLang(info, impl.replace('.', '/') + ".class"))) {
                         content.append(line).append("\n");
@@ -334,7 +335,7 @@ public abstract class CreateStandaloneJar extends NbTestCase {
             }
 
             if (content.length() > 0) {
-                out.put(resourceName, content.toString().getBytes("UTF-8"));
+                out.put(resourceName, content.toString().getBytes(StandardCharsets.UTF_8));
             }
         }
 

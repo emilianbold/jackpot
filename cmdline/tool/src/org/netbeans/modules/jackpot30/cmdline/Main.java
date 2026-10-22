@@ -1257,8 +1257,10 @@ public class Main {
             return file2AddedLines.containsKey(file);
         }
 
-        /**@param matchStart start offset of the matched tree, or -1 if unknown
-         * @param matchEnd end offset of the matched tree, or -1 if unknown*/
+        /**
+         * @param matchStart start offset of the matched tree, or -1 if unknown
+         * @param matchEnd end offset of the matched tree, or -1 if unknown
+         */
         public boolean included(ErrorDescription error, int matchStart, int matchEnd) {
             Set<Integer> addedLines = file2AddedLines.get(error.getFile());
 

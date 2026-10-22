@@ -668,8 +668,11 @@ public class Main {
                 //range. Use the span of the tree the hint matched instead; fall back to the
                 //description's own range if the tree positions cannot be determined.
                 Tree tree = ctx.getPath().getLeaf();
-                int start = (int) ctx.getInfo().getTrees().getSourcePositions().getStartPosition(ctx.getInfo().getCompilationUnit(), tree);
-                int end = (int) ctx.getInfo().getTrees().getSourcePositions().getEndPosition(ctx.getInfo().getCompilationUnit(), tree);
+                var info = ctx.getInfo();
+                var positions = info.getTrees().getSourcePositions();
+                var compilationUnit = info.getCompilationUnit();
+                int start = (int) positions.getStartPosition(compilationUnit, tree);
+                int end = (int) positions.getEndPosition(compilationUnit, tree);
                 return errors.stream().filter(ed -> patch.included(ed, start, end)).collect(Collectors.toList());
             }
 
